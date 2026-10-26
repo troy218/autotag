@@ -86,7 +86,7 @@ object Lrc {
         val bom = byteArrayOf(0xFF.toByte(), 0xFE.toByte())
         for (line in lines) {
             val text = line.text
-            if (text.isEmpty()) continue
+            if (text.isBlank()) continue
             out.write(bom)
             out.write(text.toByteArray(Charsets.UTF_16LE))
             out.write(0)

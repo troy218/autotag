@@ -26,6 +26,10 @@ GitHub Actions에서 자동 빌드됩니다.
 - 수동 실행(`workflow_dispatch`) 또는 `main` 브랜치 빌드 시 **Releases → apk-latest** 에
   APK가 올라갑니다. 폰에서 그 APK를 내려받아 설치하면 됩니다(출처를 알 수 없는 앱 허용 필요).
 
+테스트도 같은 워크플로에서 실행됩니다(`gradle :fp:test :app:testDebugUnitTest`).
+`app` 쪽 테스트는 안드로이드 기기 없이 JVM에서 실제 오디오 파일의 태그를 쓰고 다시 읽어
+검증합니다.
+
 로컬 빌드:
 
 ```bash
@@ -82,6 +86,9 @@ app/                     안드로이드 앱 (Kotlin, AndroidX 미사용 → 의
     lyrics/Lrc.kt         LRC 파싱/SYLT 페이로드 생성
     audio/AudioDecoder    MediaCodec으로 PCM 디코딩(지문용)
   src/main/java/org/jaudiotagger/   jaudiotagger 2.3.15 소스 (LGPL, 안드로이드용 패치)
+  src/main/java/org/jcodec/          JCodec MP4 서브셋 (jaudiotagger MP4 기록용, BSD-2)
+  src/test/kotlin/                   JVM 단위 테스트 (태그 쓰기/가사/문자열 정규화)
+  src/test/resources/tag/            테스트용 오디오 샘플 (mp3/flac/ogg/wav/m4a)
 fp/                      Chromaprint(AcoustID 지문) 순수 Kotlin 포팅 + 참조 테스트
 ```
 

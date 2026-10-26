@@ -56,7 +56,7 @@ object TextTools {
     }
 
     fun artistKey(s: String): String {
-        var v = artistOnly(s)
+        var v = fold(artistOnly(s))
         v = BRACKETED.replace(v, " ")
         v = PUNCT.replace(v, "")
         v = v.replace("&", "and")
@@ -96,6 +96,17 @@ object TextTools {
         val maxLen = maxOf(ka.length, kb.length)
         val distance = levenshtein(ka, kb)
         return (1.0 - distance.toDouble() / maxLen).coerceIn(0.0, 1.0)
+    }
+
+    /**
+     * Similarity of two already normalized keys (0..1). Used to cluster items
+     * whose keys differ only by a subtitle in another script etc.
+     */
+    fun keySimilarity(keyA: String, keyB: String): Double {
+        if (keyA == keyB) return 1.0
+        if (keyA.isEmpty() || keyB.isEmpty()) return 0.0
+        val maxLen = maxOf(keyA.length, keyB.length)
+        return (1.0 - levenshtein(keyA, keyB).toDouble() / maxLen).coerceIn(0.0, 1.0)
     }
 
     /** Similarity of two artist strings, tolerant to featuring credits and separators. */

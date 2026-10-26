@@ -290,12 +290,11 @@ class EnrichEngine(
     // ------------------------------------------------------------------ pass 2
 
     private fun unifyArtists(tracks: List<Track>) {
-        val groups = tracks
-            .filter { !it.meta.artist.isNullOrBlank() }
-            .groupBy { TextTools.artistKey(it.meta.artist!!) }
-            .filterKeys { it.isNotBlank() }
+        val groups = cluster(tracks) { track ->
+            track.meta.artist?.takeIf { it.isNotBlank() }?.let { TextTools.artistKey(it) }
+        }
 
-        for ((_, group) in groups) {
+        for (group in groups) {
             if (group.size < 1) continue
             val canonical = pickCanonical(group) { it.meta.artist } ?: continue
             val alias = prefs.artistAliases[canonical]
@@ -320,14 +319,13 @@ class EnrichEngine(
     }
 
     private fun unifyAlbums(tracks: List<Track>) {
-        val groups = tracks
-            .filter { !it.meta.album.isNullOrBlank() }
-            .groupBy {
-                val artistKey = TextTools.artistKey(it.meta.albumArtist ?: it.meta.artist ?: "")
-                "$artistKey|${TextTools.albumKey(it.meta.album!!)}"
-            }
+        val groups = cluster(tracks) { track ->
+            val album = track.meta.album ?: return@cluster null
+            val artistKey = TextTools.artistKey(track.meta.albumArtist ?: track.meta.artist ?: "")
+            "$artistKey|${TextTools.albumKey(album)}"
+        }
 
-        for ((_, group) in groups) {
+        for (group in groups) {
             val canonical = pickCanonical(group) { it.meta.album } ?: continue
             val alias = prefs.albumAliases[canonical]
             val finalAlbum = if (!alias.isNullOrBlank() && prefs.unifyArtistAlbum) alias else canonical
@@ -346,6 +344,24 @@ class EnrichEngine(
                 if (!rawExisting.isNullOrBlank()) prefs.rememberAlbumAlias(rawExisting, finalAlbum)
             }
         }
+    }
+
+    /**
+     * Groups tracks by a normalized key, then merges groups whose keys are
+     * nearly identical (e.g. an album title with a subtitle in another script).
+     */
+    private fun cluster(tracks: List<Track>, keyOf: (Track) -> String?): List<List<Track>> {
+        val buckets = ArrayList<Pair<String, ArrayList<Track>>>()
+        for (track in tracks) {
+            val key = keyOf(track)?.takeIf { it.isNotBlank() } ?: continue
+            val existing = buckets.firstOrNull { TextTools.keySimilarity(it.first, key) >= 0.92 }
+            if (existing != null) {
+                existing.second.add(track)
+            } else {
+                buckets.add(key to arrayListOf(track))
+            }
+        }
+        return buckets.map { it.second }
     }
 
     /**

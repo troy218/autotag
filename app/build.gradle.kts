@@ -33,6 +33,10 @@ android {
         checkReleaseBuilds = false
     }
 
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     packaging {
         resources.excludes += setOf(
             "META-INF/LICENSE",
@@ -53,6 +57,12 @@ android {
 
 dependencies {
     implementation(project(":fp"))
+
+    // jaudiotagger's MP4/in-place file operator uses okio's Buffer.
+    implementation("com.squareup.okio:okio:1.17.3")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation(kotlin("test"))
 }
 
 tasks.withType<JavaCompile>().configureEach {

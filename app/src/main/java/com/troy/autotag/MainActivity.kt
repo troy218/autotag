@@ -507,7 +507,7 @@ class MainActivity : Activity() {
                 setPadding(0, 12, 0, 0)
             }
             val edit = EditText(this).apply {
-                text = value
+                setText(value)
                 this.inputType = inputType
                 textSize = 13f
             }

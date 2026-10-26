@@ -40,10 +40,10 @@ jobs:
             head -c 200 /tmp/expected.txt || true
           fi
 
-      - name: Fingerprint unit tests (compared against fpcalc)
+      - name: Unit tests (fingerprint + tag writing)
         env:
           FP_EXPECTED_RAW_FILE: /tmp/expected.txt
-        run: gradle :fp:test --stacktrace --info
+        run: gradle :fp:test :app:testDebugUnitTest --stacktrace
 
       - name: Assemble debug APK
         run: gradle :app:assembleDebug --stacktrace
