@@ -1,6 +1,7 @@
 package com.troy.autotag.sources
 
 import com.troy.autotag.lyrics.Lrc
+import com.troy.autotag.net.Http
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -39,18 +40,33 @@ class SourcesTest {
         ]}
     """.trimIndent()
 
+    /** AcoustID lookups go out as a POST form (the fingerprint is too long for a URL). */
+    private fun acoustIdPost(
+        body: String,
+        code: Int = 200,
+        capture: (String, Map<String, String>) -> Unit = { _, _ -> },
+    ): (String, Map<String, String>) -> Http.Response? = { url, fields ->
+        capture(url, fields)
+        Http.Response(code, body.toByteArray(Charsets.UTF_8))
+    }
+
     @Test
     fun acoustIdLookupIsParsed() {
-        var requested = ""
-        val result = AcoustIdSource.lookup("key", "AQAA", 199, 0.6, { }) { url ->
-            requested = url
-            acoustIdBody
-        }
+        var requestedUrl = ""
+        var requestedFields: Map<String, String> = emptyMap()
+        val result = AcoustIdSource.lookup(
+            "key", "AQAA", 199, 0.6, { },
+            acoustIdPost(acoustIdBody) { url, fields ->
+                requestedUrl = url
+                requestedFields = fields
+            },
+        )
         assertNotNull(result)
-        assertTrue(requested.startsWith("https://api.acoustid.org/v2/lookup?"), requested)
-        assertTrue(requested.contains("client=key"), requested)
-        assertTrue(requested.contains("duration=199"), requested)
-        assertTrue(requested.contains("meta=recordings"), requested)
+        assertEquals("https://api.acoustid.org/v2/lookup", requestedUrl)
+        assertEquals("key", requestedFields["client"])
+        assertEquals("199", requestedFields["duration"])
+        assertEquals("AQAA", requestedFields["fingerprint"])
+        assertTrue(requestedFields["meta"]!!.contains("recordings"))
 
         val meta = result.meta
         assertEquals("Dynamite", meta.title)
@@ -71,14 +87,89 @@ class SourcesTest {
     fun acoustIdIgnoresLowScores() {
         val body = """{"status":"ok","results":[{"id":"x","score":0.31,"recordings":[
             {"id":"r","title":"Dynamite","artists":[{"name":"BTS"}]}]}]}"""
-        assertNull(AcoustIdSource.lookup("key", "AQAA", 199, 0.6, { }) { body })
+        assertNull(AcoustIdSource.lookup("key", "AQAA", 199, 0.6, { }, acoustIdPost(body)))
     }
 
     @Test
     fun acoustIdReportsErrors() {
-        assertNull(AcoustIdSource.lookup("key", "AQAA", 199, 0.6, { }) { """{"status":"error"}""" })
-        assertNull(AcoustIdSource.lookup("", "AQAA", 199, 0.6, { }) { acoustIdBody })
-        assertNull(AcoustIdSource.lookup("key", "", 199, 0.6, { }) { acoustIdBody })
+        assertNull(AcoustIdSource.lookup("key", "AQAA", 199, 0.6, { }, acoustIdPost("""{"status":"error"}""")))
+        assertNull(AcoustIdSource.lookup("", "AQAA", 199, 0.6, { }, acoustIdPost(acoustIdBody)))
+        assertNull(AcoustIdSource.lookup("key", "", 199, 0.6, { }, acoustIdPost(acoustIdBody)))
+    }
+
+    /** An HTTP error body carries the real reason and must reach the log. */
+    @Test
+    fun acoustIdSurfacesServerErrorMessage() {
+        val logs = ArrayList<String>()
+        val body = """{"status":"error","error":{"code":3,"message":"invalid fingerprint"}}"""
+        val result = AcoustIdSource.lookup("key-err", "AQAA", 199, 0.6, { logs.add(it) }, acoustIdPost(body, code = 400))
+        assertNull(result)
+        assertTrue(logs.any { it.contains("invalid fingerprint") }, logs.toString())
+    }
+
+    /** A rejected API key is not retried for every file of a batch. */
+    @Test
+    fun acoustIdStopsAfterInvalidApiKey() {
+        var calls = 0
+        val body = """{"status":"error","error":{"code":4,"message":"invalid API key"}}"""
+        val post = acoustIdPost(body, code = 400) { _, _ -> calls++ }
+        assertNull(AcoustIdSource.lookup("bad-key-for-test", "AQAA", 199, 0.6, { }, post))
+        assertNull(AcoustIdSource.lookup("bad-key-for-test", "AQAA", 199, 0.6, { }, post))
+        assertEquals(1, calls)
+    }
+
+    // --------------------------------------------------------------------- 벅스(Bugs)
+
+    private val bugsBody = """
+        {"list":[
+          {"track_no":1,"track_id":111,"track_title":"Dynamite","len":"03:22","disc_id":1,
+           "title_yn":false,
+           "album":{"album_id":247099,"title":"Rokstarr (Special Edition)","release_ymd":"20100101",
+                    "image":{"path":"/2470/247099.jpg"}},
+           "artists":[{"artist_id":1,"artist_nm":"Taio Cruz","genres":[{"svc_nm":"팝"}]}]},
+          {"track_no":8,"track_id":32075142,"track_title":"Dynamite","len":"03:19","disc_id":1,
+           "title_yn":false,
+           "album":{"album_id":20361943,"title":"BE","release_ymd":"20201120",
+                    "image":{"path":"/203619/20361943.jpg"}},
+           "artists":[{"artist_id":80079394,"artist_nm":"방탄소년단","genres":[{"svc_nm":"댄스/팝"}]}]}
+        ]}
+    """.trimIndent()
+
+    @Test
+    fun bugsSearchIsParsed() {
+        var requested = ""
+        val meta = BugsSource.search("Dynamite", "방탄소년단", 199, { }) { url ->
+            requested = url
+            bugsBody
+        }
+        assertNotNull(meta)
+        assertTrue(requested.startsWith("https://m.bugs.co.kr/api/getSearchList?type=track"), requested)
+        assertEquals("Dynamite", meta.title)
+        assertEquals("방탄소년단", meta.artist)
+        assertEquals("BE", meta.album)
+        assertEquals(8, meta.track)
+        assertEquals(1, meta.disc)
+        assertEquals("2020", meta.year)
+        assertEquals("댄스/팝", meta.genre)
+        assertEquals(199, meta.durationSec)
+        assertEquals("https://image.bugsm.co.kr/album/images/1000/203619/20361943.jpg", meta.artworkUrl)
+    }
+
+    @Test
+    fun bugsRejectsUnrelatedResults() {
+        val body = """{"list":[{"track_no":1,"track_title":"Completely Different","len":"01:00",
+            "album":{"album_id":1,"title":"X","release_ymd":"20200101","image":{"path":"/1/1.jpg"}},
+            "artists":[{"artist_nm":"Other Band"}]}]}"""
+        assertNull(BugsSource.search("Dynamite", "방탄소년단", 199, { }) { body })
+    }
+
+    @Test
+    fun bugsAlbumTracksAreKeyedByTitle() {
+        val tracks = BugsSource.albumTracks("BE", "방탄소년단") { bugsBody }
+        assertEquals(1, tracks.size)
+        val meta = tracks.values.first()
+        assertEquals(8, meta.track)
+        assertEquals("BE", meta.album)
     }
 
     // ---------------------------------------------------------------- MusicBrainz

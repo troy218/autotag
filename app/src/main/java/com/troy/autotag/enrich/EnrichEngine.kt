@@ -8,6 +8,7 @@ import com.troy.autotag.model.LyricsResult
 import com.troy.autotag.model.Meta
 import com.troy.autotag.model.Track
 import com.troy.autotag.sources.AcoustIdSource
+import com.troy.autotag.sources.BugsSource
 import com.troy.autotag.sources.DeezerSource
 import com.troy.autotag.sources.ItunesSource
 import com.troy.autotag.sources.LrclibSource
@@ -26,7 +27,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * Two pass enrichment:
  *
  *  pass 1 (parallel): read tags, identify the recording online
- *                     (AcoustID -> MusicBrainz -> iTunes -> Deezer) and find lyrics.
+ *                     (AcoustID -> 벅스(Bugs, 국내 우선) -> MusicBrainz -> iTunes -> Deezer)
+ *                     and find lyrics.
  *  pass 2 (serial):   make artist / album / album artist spellings consistent
  *                     across the whole batch (this is what stops player apps from
  *                     showing one artist as two different ones).
@@ -146,9 +148,15 @@ class EnrichEngine(
             }
         }
 
-        // --- 2) MusicBrainz text search ----------------------------------
+        // --- 2) 벅스(Bugs) — 국내 음원 우선 -------------------------------
         val searchTitle = knownTitle ?: found.title
         val searchArtist = knownArtist ?: found.artist
+        if (prefs.useBugs && !searchTitle.isNullOrBlank()) {
+            val bugs = BugsSource.search(searchTitle, searchArtist, duration, log)
+            if (bugs != null) found.fillFrom(bugs)
+        }
+
+        // --- 3) MusicBrainz text search ----------------------------------
         if (!authoritative && prefs.useMusicBrainz && !searchTitle.isNullOrBlank()) {
             val mb = MusicBrainzSource.searchRecording(searchTitle, searchArtist, duration, log)
             if (mb != null) {
@@ -160,7 +168,7 @@ class EnrichEngine(
             }
         }
 
-        // --- 3) iTunes (cover art, genre, track numbers) ------------------
+        // --- 4) iTunes (cover art, genre, track numbers) ------------------
         val itunesTitle = searchTitle ?: found.title
         val itunesArtist = searchArtist ?: found.artist
         if (prefs.useItunes && !itunesTitle.isNullOrBlank()) {
@@ -168,7 +176,7 @@ class EnrichEngine(
             if (itunes != null) found.fillFrom(itunes)
         }
 
-        // --- 4) Deezer (fallback for art / album data) -------------------
+        // --- 5) Deezer (fallback for art / album data) -------------------
         if (prefs.useDeezer && (found.artworkUrl == null || found.album == null || found.track == null)) {
             val deezer = DeezerSource.search(itunesTitle ?: found.title ?: "", itunesArtist ?: found.artist, duration, log)
             if (deezer != null) found.fillFrom(deezer)
@@ -376,7 +384,8 @@ class EnrichEngine(
             allCounts[value] = (allCounts[value] ?: 0) + 1
             val source = track.meta.source
             if (source.contains("AcoustID") || source.contains("MusicBrainz") ||
-                source.contains("iTunes") || source.contains("Deezer")
+                source.contains("iTunes") || source.contains("Deezer") ||
+                source.contains("Bugs") || source.contains("벅스")
             ) {
                 dbCounts[value] = (dbCounts[value] ?: 0) + 1
             }
@@ -406,7 +415,10 @@ class EnrichEngine(
             val album = group.first().meta.album ?: continue
             val artist = group.first().meta.albumArtist ?: group.first().meta.artist
             var lookup: Map<String, Meta> = emptyMap()
-            if (prefs.useItunes) {
+            if (prefs.useBugs) {
+                lookup = BugsSource.albumTracks(album, artist)
+            }
+            if (lookup.isEmpty() && prefs.useItunes) {
                 lookup = ItunesSource.albumTracks(album, artist, prefs.itunesCountry)
             }
             if (lookup.isEmpty() && prefs.useDeezer) {
@@ -500,14 +512,50 @@ class EnrichEngine(
         }
 
         // ---- artwork -----------------------------------------------------
-        val wantsArtwork = prefs.embedArtwork && meta.artworkUrl != null && !existing.hasArtwork
-        if (wantsArtwork) {
-            val art = ArtworkFetcher.fetch(meta.artworkUrl!!, prefs.artworkMaxSize, log)
-            if (art != null) {
-                edit.artworkBytes = art.bytes
-                edit.artworkMime = art.mime
-                edit.replaceArtwork = false
-                changes.add("커버 삽입 (${art.bytes.size / 1024}KB)")
+        // 커버가 없으면 넣고, 있어도 온라인에 *확실히 더 고화질*인 커버가
+        // 있을 때만 교체한다. 기존 커버는 어떤 경우에도 잃지 않는다
+        // (TagIO가 쓰기 전 스냅샷을 떠 두고, 저장 후에도 다시 확인한다).
+        if (prefs.embedArtwork && meta.artworkUrl != null) {
+            when {
+                !existing.hasArtwork -> {
+                    val art = ArtworkFetcher.fetch(meta.artworkUrl!!, prefs.artworkMaxSize, log)
+                    if (art != null) {
+                        edit.artworkBytes = art.bytes
+                        edit.artworkMime = art.mime
+                        edit.replaceArtwork = false
+                        changes.add("커버 삽입 (${art.sizeLabel()}, ${art.bytes.size / 1024}KB)")
+                    }
+                }
+                prefs.upgradeArtwork -> {
+                    val alreadyBigEnough = prefs.artworkMaxSize > 0 &&
+                        existing.artworkWidth >= prefs.artworkMaxSize &&
+                        existing.artworkHeight >= prefs.artworkMaxSize
+                    if (alreadyBigEnough) {
+                        log("  커버 유지: 기존 ${existing.artworkWidth}x${existing.artworkHeight} (상한 도달)")
+                    } else {
+                        val art = ArtworkFetcher.fetch(meta.artworkUrl!!, prefs.artworkMaxSize, log)
+                        if (art != null) {
+                            val upgrade = com.troy.autotag.util.ImageInfo.isClearUpgrade(
+                                existing.artworkWidth, existing.artworkHeight, existing.artworkBytes,
+                                art.width, art.height, art.bytes.size,
+                            )
+                            if (upgrade) {
+                                edit.artworkBytes = art.bytes
+                                edit.artworkMime = art.mime
+                                edit.replaceArtwork = true
+                                changes.add(
+                                    "커버 교체(고화질): ${existing.artworkWidth}x${existing.artworkHeight} → " +
+                                        "${art.sizeLabel()} (${art.bytes.size / 1024}KB)"
+                                )
+                            } else {
+                                log(
+                                    "  커버 유지: 기존 ${existing.artworkWidth}x${existing.artworkHeight} ≥ " +
+                                        "신규 ${art.sizeLabel()}"
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -541,6 +589,9 @@ class EnrichEngine(
         val after = TagIO.read(track.file)
         if (ok && after.title.isNullOrBlank() && !meta.title.isNullOrBlank()) {
             log("  ! 저장 후 확인 실패")
+        }
+        if (ok && existing.hasArtwork && !after.hasArtwork) {
+            log("  ! 저장 후 커버가 사라졌습니다 — .bak 백업으로 되돌릴 수 있습니다")
         }
     }
 

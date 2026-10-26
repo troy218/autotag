@@ -21,6 +21,16 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("use_mb", true)
         set(value) = sp.edit().putBoolean("use_mb", value).apply()
 
+    /** 벅스(Bugs) — 국내 음원 우선 검색. */
+    var useBugs: Boolean
+        get() = sp.getBoolean("use_bugs", true)
+        set(value) = sp.edit().putBoolean("use_bugs", value).apply()
+
+    /** Replace an existing cover when an online source has a clearly better one. */
+    var upgradeArtwork: Boolean
+        get() = sp.getBoolean("upgrade_artwork", true)
+        set(value) = sp.edit().putBoolean("upgrade_artwork", value).apply()
+
     var useItunes: Boolean
         get() = sp.getBoolean("use_itunes", true)
         set(value) = sp.edit().putBoolean("use_itunes", value).apply()
@@ -101,6 +111,11 @@ class Prefs(context: Context) {
     var artworkMaxSize: Int
         get() = sp.getInt("artwork_max_size", 1000)
         set(value) = sp.edit().putInt("artwork_max_size", value).apply()
+
+    /** 배터리 최적화 제외 안내를 이미 보여 줬는지 (삼성 One UI 절전 대응). */
+    var batteryHintSeen: Boolean
+        get() = sp.getBoolean("battery_hint_seen", false)
+        set(value) = sp.edit().putBoolean("battery_hint_seen", value).apply()
 
     /** Learned "raw spelling -> canonical spelling" artist aliases. */
     var artistAliases: MutableMap<String, String>

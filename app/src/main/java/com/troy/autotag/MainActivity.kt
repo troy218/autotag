@@ -10,9 +10,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.PowerManager
 import android.provider.MediaStore
 import android.provider.Settings
 import android.text.InputType
+import android.view.HapticFeedbackConstants
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -24,13 +26,24 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import com.troy.autotag.enrich.EnrichEngine
-import com.troy.autotag.fp.Chromaprint
 import com.troy.autotag.model.Track
 import com.troy.autotag.tag.TagIO
+import com.troy.autotag.work.TagWork
 import java.io.File
 
-class MainActivity : Activity() {
+/**
+ * 단순화된 한 화면 UI.
+ *
+ * 흐름은 딱 세 단계다:
+ *  1) [음악 불러오기] 한 번으로 기기 전체/폴더/파일 중 골라 담는다.
+ *  2) 고를 파일이 있으면 목록을 **길게 눌러** 선택 모드에 들어가고,
+ *     그 뒤로는 톡톡 눌러 선택/해제한다. 아무것도 선택하지 않으면 전체가 대상.
+ *  3) 아래 큰 [태그 채우기] 버튼. 작업 중에는 같은 버튼이 [중지]가 된다.
+ *
+ * 실제 작업은 포그라운드 서비스(TagService + TagWork)가 돌리므로
+ * 화면을 끄거나 앱을 내려도 계속 진행된다.
+ */
+class MainActivity : Activity(), TagWork.Listener {
 
     private lateinit var prefs: Prefs
     private val tracks = ArrayList<Track>()
@@ -38,18 +51,22 @@ class MainActivity : Activity() {
     private lateinit var adapter: ArrayAdapter<String>
 
     private lateinit var statusText: TextView
-    private lateinit var selectionText: TextView
-    private lateinit var currentText: TextView
+    private lateinit var listHeaderText: TextView
+    private lateinit var selectionBar: LinearLayout
     private lateinit var logText: TextView
     private lateinit var logScroll: ScrollView
     private lateinit var listView: ListView
     private lateinit var progressBar: ProgressBar
+    private lateinit var currentText: TextView
     private lateinit var btnStart: Button
-    private lateinit var btnStop: Button
+    private lateinit var btnCopyLog: Button
+    private lateinit var btnLogToggle: Button
 
-    @Volatile
-    private var running = false
+    /** 길게 눌러 들어가는 선택 모드인지 (이 모드에서만 탭이 선택을 바꾼다). */
+    private var selectionMode = false
     private var importCounter = 0
+
+    // ---------------------------------------------------------------- lifecycle
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,32 +75,91 @@ class MainActivity : Activity() {
         TagIO.init()
 
         statusText = findViewById(R.id.statusText)
-        selectionText = findViewById(R.id.selectionText)
-        currentText = findViewById(R.id.currentText)
+        listHeaderText = findViewById(R.id.listHeaderText)
+        selectionBar = findViewById(R.id.selectionBar)
         logText = findViewById(R.id.logText)
         logScroll = findViewById(R.id.logScroll)
         listView = findViewById(R.id.fileList)
         progressBar = findViewById(R.id.progressBar)
+        currentText = findViewById(R.id.currentText)
         btnStart = findViewById(R.id.btnStart)
-        btnStop = findViewById(R.id.btnStop)
+        btnCopyLog = findViewById(R.id.btnCopyLog)
+        btnLogToggle = findViewById(R.id.btnLogToggle)
 
         adapter = ArrayAdapter(this, android.R.layout.simple_list_item_multiple_choice, labels)
         listView.adapter = adapter
-        listView.setOnItemClickListener { _, _, _, _ -> updateSelectionText() }
+        listView.setOnItemClickListener { _, _, position, _ ->
+            if (!selectionMode) {
+                // 선택 모드가 아니면 탭은 선택을 바꾸지 않는다.
+                listView.setItemChecked(position, false)
+            }
+            updateSelectionUi()
+        }
+        listView.setOnItemLongClickListener { _, view, position, _ ->
+            if (!TagWork.running) {
+                selectionMode = true
+                listView.setItemChecked(position, true)
+                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                updateSelectionUi()
+            }
+            true
+        }
 
-        findViewById<Button>(R.id.btnPermission).setOnClickListener { requestAllFilesAccess() }
-        findViewById<Button>(R.id.btnScanMusic).setOnClickListener { scanMediaStore() }
-        findViewById<Button>(R.id.btnPickFolder).setOnClickListener { pickFolder() }
-        findViewById<Button>(R.id.btnPickFiles).setOnClickListener { pickFiles() }
+        findViewById<Button>(R.id.btnAdd).setOnClickListener { showAddDialog() }
         findViewById<Button>(R.id.btnSettings).setOnClickListener { showSettings() }
-        findViewById<Button>(R.id.btnSelectAll).setOnClickListener { toggleSelectAll() }
         findViewById<Button>(R.id.btnClear).setOnClickListener { clearTracks() }
-        findViewById<Button>(R.id.btnCopyLog).setOnClickListener { copyLog() }
-        btnStart.setOnClickListener { startProcessing() }
-        btnStop.setOnClickListener { stopProcessing() }
+        findViewById<Button>(R.id.btnSelAll).setOnClickListener {
+            for (i in tracks.indices) listView.setItemChecked(i, true)
+            updateSelectionUi()
+        }
+        findViewById<Button>(R.id.btnSelNone).setOnClickListener {
+            clearChecks()
+            updateSelectionUi()
+        }
+        findViewById<Button>(R.id.btnSelDone).setOnClickListener {
+            selectionMode = false
+            updateSelectionUi()
+        }
+        btnLogToggle.setOnClickListener {
+            val show = logScroll.visibility != View.VISIBLE
+            logScroll.visibility = if (show) View.VISIBLE else View.GONE
+            btnCopyLog.visibility = if (show) View.VISIBLE else View.GONE
+            btnLogToggle.text = if (show) "로그 숨기기" else "로그 보기"
+        }
+        btnCopyLog.setOnClickListener { copyLog() }
+        statusText.setOnClickListener {
+            if (!hasAllFilesAccess()) requestAllFilesAccess()
+        }
+        btnStart.setOnClickListener {
+            if (TagWork.running) {
+                TagWork.requestStop()
+                renderRunningState()
+            } else {
+                startProcessing()
+            }
+        }
 
-        appendLog("AutoTag 준비 완료. AcoustID 키: ${prefs.acoustIdKey.take(4)}…")
+        // 작업 도중 화면이 재생성된 경우 진행 중인 목록을 복원한다.
+        if (tracks.isEmpty() && TagWork.lastTracks.isNotEmpty()) {
+            tracks.addAll(TagWork.lastTracks)
+            renderList()
+        }
+        restoreLog()
         updatePermissionStatus()
+        renderRunningState()
+        updateSelectionUi()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        TagWork.listener = this
+        restoreLog()
+        renderRunningState()
+    }
+
+    override fun onStop() {
+        if (TagWork.listener === this) TagWork.listener = null
+        super.onStop()
     }
 
     override fun onResume() {
@@ -91,7 +167,29 @@ class MainActivity : Activity() {
         updatePermissionStatus()
     }
 
-    // ------------------------------------------------------------ permissions
+    // ------------------------------------------------------------- TagWork.Listener
+
+    override fun onLog(line: String) {
+        runOnUiThread { appendLog(line) }
+    }
+
+    override fun onProgress(done: Int, total: Int, current: String) {
+        runOnUiThread {
+            progressBar.progress = if (total > 0) done * 100 / total else 0
+            currentText.text = "($done/$total) $current"
+            if (done % 3 == 0 || done == total) renderList()
+        }
+    }
+
+    override fun onFinished() {
+        runOnUiThread {
+            renderList()
+            renderRunningState()
+            TagWork.summary?.let { toast(it) }
+        }
+    }
+
+    // --------------------------------------------------------------- permissions
 
     private fun hasAllFilesAccess(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -102,14 +200,27 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun updatePermissionStatus() {
-        val granted = hasAllFilesAccess()
-        statusText.text = if (granted) {
-            "권한 OK · AcoustID ${if (prefs.useAcoustId) "ON" else "OFF"} · 파일 ${tracks.size}개"
+    private fun hasReadAudioPermission(): Boolean {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_AUDIO
         } else {
-            "⚠ 파일 접근 권한 필요 ('권한' 버튼을 누르세요)"
+            Manifest.permission.READ_EXTERNAL_STORAGE
         }
-        statusText.setTextColor(if (granted) Color.parseColor("#1B5E20") else Color.parseColor("#B71C1C"))
+        return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun updatePermissionStatus() {
+        statusText.text = when {
+            hasAllFilesAccess() ->
+                "파일 접근 OK · ${if (prefs.useAcoustId) "AcoustID ON" else "AcoustID OFF"}"
+            hasReadAudioPermission() ->
+                "음악 읽기는 가능 · 파일을 고치려면 여기를 눌러 '모든 파일 액세스'를 허용하세요"
+            else ->
+                "⚠ 권한 필요 — 여기를 눌러 허용하세요"
+        }
+        statusText.setTextColor(
+            Color.parseColor(if (hasAllFilesAccess()) "#1B5E20" else "#B71C1C")
+        )
     }
 
     private fun requestAllFilesAccess() {
@@ -134,8 +245,26 @@ class MainActivity : Activity() {
                     Manifest.permission.READ_EXTERNAL_STORAGE,
                     Manifest.permission.WRITE_EXTERNAL_STORAGE,
                 ),
-                1001,
+                REQ_LEGACY_STORAGE,
             )
+        }
+    }
+
+    private fun requestReadAudio() {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        requestPermissions(arrayOf(permission), REQ_READ_AUDIO)
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFICATIONS)
         }
     }
 
@@ -146,53 +275,100 @@ class MainActivity : Activity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         updatePermissionStatus()
+        if (requestCode == REQ_READ_AUDIO &&
+            grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        ) {
+            scanMediaStore()
+        }
     }
 
-    // ---------------------------------------------------------------- scanning
-
-    private fun clearTracks() {
-        if (running) {
-            toast("작업 중에는 지울 수 없습니다")
+    /** 목록을 읽을 권한이 없으면 어떤 권한을 받을지 한 번만 물어본다. */
+    private fun ensureLibraryAccess(onReady: () -> Unit) {
+        if (hasAllFilesAccess() || hasReadAudioPermission()) {
+            onReady()
             return
         }
-        tracks.clear()
-        renderList()
+        AlertDialog.Builder(this)
+            .setTitle("권한이 필요합니다")
+            .setMessage("음악 목록을 불러오려면 접근 권한이 필요합니다.\n파일을 직접 고쳐 쓰려면 '모든 파일 액세스'가 필요합니다.")
+            .setPositiveButton("모든 파일 허용") { _, _ -> requestAllFilesAccess() }
+            .setNeutralButton("음악만 허용") { _, _ -> requestReadAudio() }
+            .setNegativeButton("취소", null)
+            .show()
+    }
+
+    private fun isBatteryOptimizationIgnored(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        val pm = getSystemService(PowerManager::class.java) ?: return true
+        return pm.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    private fun openBatteryOptimizationSettings() {
+        runCatching {
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName"),
+                )
+            )
+        }.onFailure {
+            runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+        }
+    }
+
+    // ------------------------------------------------------------------ 불러오기
+
+    private fun showAddDialog() {
+        if (TagWork.running) {
+            toast("작업 중에는 추가할 수 없습니다")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("음악 불러오기")
+            .setItems(arrayOf("기기 음악 전체", "폴더 선택", "파일 선택")) { _, which ->
+                when (which) {
+                    0 -> ensureLibraryAccess { scanMediaStore() }
+                    1 -> {
+                        if (hasAllFilesAccess()) {
+                            showFolderDialog(Environment.getExternalStorageDirectory() ?: File("/storage"))
+                        } else {
+                            toast("폴더를 직접 읽으려면 '모든 파일 액세스'가 필요합니다")
+                            requestAllFilesAccess()
+                        }
+                    }
+                    else -> pickFiles()
+                }
+            }
+            .setNegativeButton("취소", null)
+            .show()
     }
 
     private fun scanMediaStore() {
-        if (!hasAllFilesAccess()) {
-            toast("먼저 '권한'을 허용해 주세요")
-            return
-        }
-        val found = ArrayList<File>()
-        val projection = arrayOf(MediaStore.Audio.Media.DATA, MediaStore.Audio.Media.DISPLAY_NAME)
-        runCatching {
-            contentResolver.query(
-                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                projection,
-                MediaStore.Audio.Media.IS_MUSIC + "!=0",
-                null,
-                null,
-            )?.use { cursor ->
-                val dataIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
-                while (cursor.moveToNext() && found.size < 5000) {
-                    val path = if (dataIndex >= 0) cursor.getString(dataIndex) else null
-                    if (path.isNullOrBlank()) continue
-                    val file = File(path)
-                    if (file.exists() && isAudio(file)) found.add(file)
+        toast("음악을 찾는 중…")
+        Thread {
+            val found = ArrayList<File>()
+            runCatching {
+                val projection = arrayOf(MediaStore.Audio.Media.DATA, MediaStore.Audio.Media.DISPLAY_NAME)
+                contentResolver.query(
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                    projection,
+                    MediaStore.Audio.Media.IS_MUSIC + "!=0",
+                    null,
+                    null,
+                )?.use { cursor ->
+                    val dataIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+                    while (cursor.moveToNext() && found.size < 5000) {
+                        val path = if (dataIndex >= 0) cursor.getString(dataIndex) else null
+                        if (path.isNullOrBlank()) continue
+                        val file = File(path)
+                        if (file.exists() && isAudio(file)) found.add(file)
+                    }
                 }
+            }.onFailure {
+                runOnUiThread { appendLog("음악 스캔 실패: ${it.message}") }
             }
-        }.onFailure { appendLog("MediaStore 스캔 실패: ${it.message}") }
-        addFiles(found, "음악 전체")
-    }
-
-    private fun pickFolder() {
-        if (!hasAllFilesAccess()) {
-            toast("먼저 '권한'을 허용해 주세요")
-            return
-        }
-        val root = Environment.getExternalStorageDirectory() ?: File("/storage")
-        showFolderDialog(root)
+            runOnUiThread { addFiles(found, "음악 전체") }
+        }.start()
     }
 
     private fun showFolderDialog(start: File) {
@@ -223,48 +399,29 @@ class MainActivity : Activity() {
     }
 
     private fun scanFolder(dir: File) {
-        val found = ArrayList<File>()
-        val stack = ArrayDeque<Pair<File, Int>>()
-        stack.add(dir to 0)
-        while (stack.isNotEmpty() && found.size < 5000) {
-            val (current, depth) = stack.removeLast()
-            val entries = current.listFiles() ?: continue
-            for (entry in entries) {
-                if (found.size >= 5000) break
-                if (entry.isDirectory) {
-                    if (depth < 12 && !entry.name.startsWith(".") &&
-                        entry.name != "Android" && entry.canRead()
-                    ) {
-                        stack.add(entry to depth + 1)
+        toast("폴더를 찾는 중…")
+        Thread {
+            val found = ArrayList<File>()
+            val stack = ArrayDeque<Pair<File, Int>>()
+            stack.add(dir to 0)
+            while (stack.isNotEmpty() && found.size < 5000) {
+                val (current, depth) = stack.removeLast()
+                val entries = current.listFiles() ?: continue
+                for (entry in entries) {
+                    if (found.size >= 5000) break
+                    if (entry.isDirectory) {
+                        if (depth < 12 && !entry.name.startsWith(".") &&
+                            entry.name != "Android" && entry.canRead()
+                        ) {
+                            stack.add(entry to depth + 1)
+                        }
+                    } else if (isAudio(entry)) {
+                        found.add(entry)
                     }
-                } else if (isAudio(entry)) {
-                    found.add(entry)
                 }
             }
-        }
-        addFiles(found, dir.name)
-    }
-
-    private fun isAudio(file: File): Boolean =
-        Prefs.AUDIO_EXTENSIONS.contains(file.extension.lowercase())
-
-    private fun addFiles(found: List<File>, source: String) {
-        val existingPaths = tracks.map { it.file.absolutePath }.toHashSet()
-        var added = 0
-        for (file in found) {
-            if (existingPaths.contains(file.absolutePath)) continue
-            if (!file.canRead()) {
-                if (file.extension.lowercase() in setOf("mp3", "flac", "m4a", "ogg", "wav", "aiff", "aif")) {
-                    appendLog("읽기 불가: ${file.absolutePath}")
-                }
-                continue
-            }
-            tracks.add(Track(file = file))
-            added++
-        }
-        appendLog("$source: ${added}개 파일 추가 (총 ${tracks.size}개)")
-        renderList()
-        checkSelectAll()
+            runOnUiThread { addFiles(found, dir.name) }
+        }.start()
     }
 
     private fun pickFiles() {
@@ -285,23 +442,42 @@ class MainActivity : Activity() {
             for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri)
         } ?: data.data?.let { uris.add(it) }
         if (uris.isEmpty()) return
-        for (uri in uris) {
-            runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            val direct = resolveFile(uri)
-            if (direct != null && direct.canWrite()) {
-                tracks.add(Track(file = direct, uri = uri))
-            } else {
-                val cached = importToCache(uri)
-                if (cached != null) {
-                    tracks.add(Track(file = cached, uri = uri, needsCopyBack = true))
-                    appendLog("캐시로 복사: ${cached.name} (작업 후 원본에 되씁니다)")
+        // 파일 복사가 UI 스레드를 막지 않게 백그라운드에서 처리한다.
+        Thread {
+            val added = ArrayList<Track>()
+            val notes = ArrayList<String>()
+            for (uri in uris) {
+                runCatching {
+                    contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                    )
+                }
+                val direct = resolveFile(uri)
+                if (direct != null && direct.canWrite()) {
+                    added.add(Track(file = direct, uri = uri))
                 } else {
-                    appendLog("파일을 열 수 없음: $uri")
+                    val cached = importToCache(uri)
+                    if (cached != null) {
+                        added.add(Track(file = cached, uri = uri, needsCopyBack = true))
+                        notes.add("캐시로 복사: ${cached.name} (작업 후 원본에 되씁니다)")
+                    } else {
+                        notes.add("파일을 열 수 없음: $uri")
+                    }
                 }
             }
-        }
-        renderList()
-        checkSelectAll()
+            runOnUiThread {
+                notes.forEach { appendLog(it) }
+                val before = tracks.size
+                val existingPaths = tracks.map { it.file.absolutePath }.toHashSet()
+                for (track in added) {
+                    if (!existingPaths.contains(track.file.absolutePath)) tracks.add(track)
+                }
+                appendLog("파일 선택: ${tracks.size - before}개 파일 추가 (총 ${tracks.size}개)")
+                renderList()
+            }
+        }.start()
     }
 
     private fun resolveFile(uri: Uri): File? {
@@ -337,129 +513,157 @@ class MainActivity : Activity() {
         }.getOrNull()
     }
 
-    // -------------------------------------------------------------------- list
+    private fun addFiles(found: List<File>, source: String) {
+        val existingPaths = tracks.map { it.file.absolutePath }.toHashSet()
+        var added = 0
+        for (file in found) {
+            if (existingPaths.contains(file.absolutePath)) continue
+            if (!file.canRead()) continue
+            tracks.add(Track(file = file))
+            added++
+        }
+        appendLog("$source: ${added}개 파일 추가 (총 ${tracks.size}개)")
+        renderList()
+    }
+
+    // ------------------------------------------------------------------ 목록/선택
+
+    private fun isAudio(file: File): Boolean =
+        Prefs.AUDIO_EXTENSIONS.contains(file.extension.lowercase())
+
+    private fun clearTracks() {
+        if (TagWork.running) {
+            toast("작업 중에는 지울 수 없습니다")
+            return
+        }
+        listView.clearChoices()
+        tracks.clear()
+        selectionMode = false
+        renderList()
+    }
 
     private fun renderList() {
         labels.clear()
         for (track in tracks) {
             val existing = track.tags
             val detail = when {
-                !track.status.isBlank() -> track.status
+                track.status.isNotBlank() -> track.status
                 existing.hasAnyTag -> existing.summary()
                 else -> "(태그 없음)"
             }
             labels.add("${track.file.name}\n   $detail")
         }
         adapter.notifyDataSetChanged()
-        updateSelectionText()
+        updateSelectionUi()
         updatePermissionStatus()
     }
 
-    private fun toggleSelectAll() {
-        val allChecked = (0 until listView.count).all { listView.isItemChecked(it) }
-        for (i in 0 until listView.count) listView.setItemChecked(i, !allChecked)
-        updateSelectionText()
+    private fun clearChecks() {
+        for (i in tracks.indices) listView.setItemChecked(i, false)
     }
 
-    private fun checkSelectAll() {
-        for (i in 0 until listView.count) listView.setItemChecked(i, true)
-        updateSelectionText()
-    }
-
-    private fun selectedTracks(): List<Track> {
+    private fun checkedTracks(): List<Track> {
         val out = ArrayList<Track>()
-        for (i in 0 until listView.count) {
-            if (listView.isItemChecked(i) && i < tracks.size) out.add(tracks[i])
+        for (i in tracks.indices) {
+            if (listView.isItemChecked(i)) out.add(tracks[i])
         }
         return out
     }
 
-    private fun updateSelectionText() {
-        val selected = selectedTracks().size
-        selectionText.text = "파일 ${tracks.size}개 · 선택 ${selected}개"
+    /** 실행 대상: 선택한 게 있으면 그것만, 없으면 전체. */
+    private fun tracksToRun(): List<Track> {
+        val checked = checkedTracks()
+        return if (checked.isNotEmpty()) checked else ArrayList(tracks)
     }
 
-    // ----------------------------------------------------------------- process
+    private fun updateSelectionUi() {
+        selectionBar.visibility = if (selectionMode) View.VISIBLE else View.GONE
+        val checked = checkedTracks().size
+        listHeaderText.text = when {
+            tracks.isEmpty() -> "파일 없음 — '음악 불러오기'로 시작하세요"
+            selectionMode -> "${checked}개 선택됨 · 눌러서 선택/해제"
+            checked > 0 -> "파일 ${tracks.size}개 · ${checked}개 선택됨 (길게 누르면 더 선택)"
+            else -> "파일 ${tracks.size}개 · 길게 누르면 선택, 선택 없으면 전체 처리"
+        }
+        if (!TagWork.running) {
+            btnStart.text = when {
+                tracks.isEmpty() -> "태그 채우기"
+                checked > 0 -> "선택한 ${checked}개 태그 채우기"
+                else -> "전체 ${tracks.size}개 태그 채우기"
+            }
+            btnStart.isEnabled = tracks.isNotEmpty()
+        }
+    }
+
+    private fun renderRunningState() {
+        val running = TagWork.running
+        progressBar.visibility = if (running) View.VISIBLE else View.GONE
+        currentText.visibility = if (running) View.VISIBLE else View.GONE
+        btnStart.text = if (running) "중지" else btnStart.text
+        btnStart.isEnabled = running || tracks.isNotEmpty()
+        if (running) {
+            val total = TagWork.totalCount
+            val done = TagWork.doneCount
+            if (total > 0) {
+                progressBar.progress = done * 100 / total
+                currentText.text = "($done/$total) ${TagWork.currentName}"
+            }
+        } else {
+            updateSelectionUi()
+        }
+    }
+
+    // -------------------------------------------------------------------- 실행
 
     private fun startProcessing() {
-        if (running) return
-        val selected = selectedTracks()
+        val selected = tracksToRun()
         if (selected.isEmpty()) {
-            toast("처리할 파일을 선택하세요")
+            toast("먼저 음악을 불러오세요")
             return
         }
-        // SAF 로 가져온 파일은 캐시에서 고친 뒤 원본 URI 로 되쓰기 때문에 전체 접근 권한이 없어도 된다.
-        val needsDirectAccess = selected.any { !it.needsCopyBack }
-        if (needsDirectAccess && !hasAllFilesAccess()) {
-            toast("파일 쓰기 권한이 필요합니다 ('권한' 버튼)")
+        // 직접 경로로 쓰는 파일이 있으면 모든 파일 액세스가 필요하다.
+        if (selected.any { !it.needsCopyBack } && !hasAllFilesAccess()) {
+            AlertDialog.Builder(this)
+                .setTitle("모든 파일 액세스가 필요합니다")
+                .setMessage("선택한 파일을 직접 고쳐 쓰려면 '모든 파일 액세스' 허용이 필요합니다. (파일 선택으로 가져온 파일은 없어도 됩니다)")
+                .setPositiveButton("허용하러 가기") { _, _ -> requestAllFilesAccess() }
+                .setNegativeButton("취소", null)
+                .show()
             return
         }
-        running = true
-        btnStart.isEnabled = false
-        btnStop.isEnabled = true
-        progressBar.progress = 0
-        appendLog("=== 시작: ${selected.size}개 파일 ===")
-
-        val engine = EnrichEngine(
-            prefs = prefs,
-            log = { line -> runOnUiThread { appendLog(line) } },
-            cancelled = { !running },
-        )
-        Thread {
-            try {
-                engine.run(selected) { done, total, name ->
-                    runOnUiThread {
-                        progressBar.progress = if (total > 0) done * 100 / total else 0
-                        currentText.text = "($done/$total) $name"
-                        if (done % 3 == 0 || done == total) renderList()
-                    }
-                }
-                for (track in selected) {
-                    if (track.needsCopyBack && track.uri != null) {
-                        val ok = copyBack(track)
-                        runOnUiThread {
-                            appendLog(
-                                if (ok) "  ↳ 원본 파일에 반영: ${track.file.name}"
-                                else "  ↳ 원본 반영 실패: ${track.file.name}"
-                            )
-                        }
-                    }
-                }
-            } catch (t: Throwable) {
-                runOnUiThread { appendLog("오류: ${t.message}") }
-            } finally {
-                runOnUiThread {
-                    running = false
-                    btnStart.isEnabled = true
-                    btnStop.isEnabled = false
-                    renderList()
-                    val okCount = selected.count { it.status.contains("변경") }
-                    val failCount = selected.count { it.error != null || it.status.contains("실패") }
-                    appendLog("=== 완료: 변경 ${okCount}개 / 실패 ${failCount}개 / 전체 ${selected.size}개 ===")
-                    currentText.text = "완료"
-                }
-            }
-        }.start()
+        // 삼성 One UI는 배터리 최적화 대상 앱의 백그라운드 작업을 멈출 수 있다.
+        if (!prefs.batteryHintSeen && !isBatteryOptimizationIgnored()) {
+            prefs.batteryHintSeen = true
+            AlertDialog.Builder(this)
+                .setTitle("배터리 설정 안내")
+                .setMessage("화면을 끈 채로 오래 돌리면 삼성 배터리 관리가 작업을 멈출 수 있습니다. 배터리 최적화에서 제외하면 끝까지 안정적으로 돕니다.")
+                .setPositiveButton("그냥 시작") { _, _ -> reallyStart(selected) }
+                .setNeutralButton("배터리 설정 열기") { _, _ -> openBatteryOptimizationSettings() }
+                .setNegativeButton("취소", null)
+                .show()
+            return
+        }
+        reallyStart(selected)
     }
 
-    private fun stopProcessing() {
-        running = false
-        appendLog("중지 요청… (진행 중인 파일이 끝나면 멈춥니다)")
+    private fun reallyStart(selected: List<Track>) {
+        requestNotificationPermission()
+        if (TagWork.start(this, selected)) {
+            renderRunningState()
+        } else {
+            toast("이미 작업 중입니다")
+        }
     }
 
-    private fun copyBack(track: Track): Boolean {
-        val uri = track.uri ?: return false
-        return runCatching {
-            contentResolver.openOutputStream(uri, "wt")?.use { output ->
-                track.file.inputStream().use { input -> input.copyTo(output) }
-            } != null
-        }.getOrDefault(false)
-    }
+    // -------------------------------------------------------------------- 로그 등
 
-    private fun copyLog() {
-        val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("AutoTag log", logText.text))
-        toast("로그를 복사했습니다")
+    private fun restoreLog() {
+        val snapshot = TagWork.logSnapshot()
+        logText.text = if (snapshot.isEmpty()) {
+            "AutoTag 준비 완료"
+        } else {
+            snapshot.joinToString("\n")
+        }
     }
 
     private fun appendLog(line: String) {
@@ -467,7 +671,15 @@ class MainActivity : Activity() {
         val merged = if (current.isEmpty()) line else "$current\n$line"
         val trimmed = if (merged.length > 60000) merged.substring(merged.length - 60000) else merged
         logText.text = trimmed
-        logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+        if (logScroll.visibility == View.VISIBLE) {
+            logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+        }
+    }
+
+    private fun copyLog() {
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("AutoTag log", logText.text))
+        toast("로그를 복사했습니다")
     }
 
     private fun toast(message: String) {
@@ -484,7 +696,7 @@ class MainActivity : Activity() {
         }
         scroll.addView(container)
 
-        val checkboxes = ArrayList<Pair<CheckBox, () -> Unit>>()
+        val savers = ArrayList<() -> Unit>()
 
         fun addCheck(
             label: String,
@@ -497,7 +709,7 @@ class MainActivity : Activity() {
                 textSize = 13f
             }
             container.addView(box)
-            checkboxes.add(box to { set(box.isChecked) })
+            savers.add { set(box.isChecked) }
         }
 
         fun addNumber(label: String, value: String, inputType: Int, set: (String) -> Unit) {
@@ -513,29 +725,27 @@ class MainActivity : Activity() {
             }
             container.addView(title)
             container.addView(edit)
-            checkboxes.add(CheckBox(this).apply { visibility = View.GONE } to { set(edit.text.toString()) })
+            savers.add { set(edit.text.toString()) }
         }
 
-        val title = TextView(this).apply {
-            text = "소스"
-            textSize = 14f
-            this.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        fun addTitle(text: String, topPadding: Int = 0) {
+            container.addView(TextView(this).apply {
+                this.text = text
+                textSize = 14f
+                setPadding(0, topPadding, 0, 0)
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+            })
         }
-        container.addView(title)
 
+        addTitle("검색 소스")
         addCheck("AcoustID 지문 사용 (우선)", { prefs.useAcoustId }) { prefs.useAcoustId = it }
+        addCheck("벅스(Bugs) 검색 (국내 음원 우선)", { prefs.useBugs }) { prefs.useBugs = it }
         addCheck("MusicBrainz 검색", { prefs.useMusicBrainz }) { prefs.useMusicBrainz = it }
         addCheck("iTunes 검색 (커버/트랙번호)", { prefs.useItunes }) { prefs.useItunes = it }
         addCheck("Deezer 검색 (보조)", { prefs.useDeezer }) { prefs.useDeezer = it }
         addCheck("LRCLIB 가사(싱크 우선)", { prefs.useLyrics }) { prefs.useLyrics = it }
 
-        val title2 = TextView(this).apply {
-            text = "태그 정책"
-            textSize = 14f
-            setPadding(0, 16, 0, 0)
-            this.typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }
-        container.addView(title2)
+        addTitle("태그 정책", topPadding = 16)
         addCheck("빈 항목만 채우기 (기존 값 유지)", { prefs.fillMissingOnly }) { prefs.fillMissingOnly = it }
         addCheck("가수/앨범 표기 통일", { prefs.unifyArtistAlbum }) { prefs.unifyArtistAlbum = it }
         addCheck("가수에서 feat. 제거", { prefs.stripFeaturing }) { prefs.stripFeaturing = it }
@@ -543,16 +753,11 @@ class MainActivity : Activity() {
         addCheck("싱크가사 우선", { prefs.preferSyncedLyrics }) { prefs.preferSyncedLyrics = it }
         addCheck(".lrc 파일도 생성", { prefs.writeLrcSidecar }) { prefs.writeLrcSidecar = it }
         addCheck("커버 이미지 삽입", { prefs.embedArtwork }) { prefs.embedArtwork = it }
+        addCheck("더 고화질 커버가 있으면 교체", { prefs.upgradeArtwork }) { prefs.upgradeArtwork = it }
         addCheck("원본 .bak 백업", { prefs.backupOriginal }) { prefs.backupOriginal = it }
         addCheck("MusicBrainz ID 기록", { prefs.writeMbIds }) { prefs.writeMbIds = it }
 
-        val title3 = TextView(this).apply {
-            text = "세부 설정"
-            textSize = 14f
-            setPadding(0, 16, 0, 0)
-            this.typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }
-        container.addView(title3)
+        addTitle("세부 설정", topPadding = 16)
         addNumber("AcoustID API 키", prefs.acoustIdKey, InputType.TYPE_CLASS_TEXT) {
             if (it.isNotBlank()) prefs.acoustIdKey = it
         }
@@ -579,7 +784,7 @@ class MainActivity : Activity() {
             .setTitle("설정")
             .setView(scroll)
             .setPositiveButton("저장") { _, _ ->
-                checkboxes.forEach { it.second() }
+                savers.forEach { it() }
                 appendLog("설정 저장됨")
                 updatePermissionStatus()
             }
@@ -592,9 +797,10 @@ class MainActivity : Activity() {
             .show()
     }
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-
     companion object {
         private const val REQUEST_PICK_FILES = 2001
+        private const val REQ_LEGACY_STORAGE = 1001
+        private const val REQ_NOTIFICATIONS = 1002
+        private const val REQ_READ_AUDIO = 1003
     }
 }

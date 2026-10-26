@@ -105,6 +105,69 @@ class TagIOTest {
             edit.replaceArtwork = true
             val ok = TagIO.write(file, edit, fullWrite = true) { println("[$name] $it") }
             assertTrue(ok, "$name: write() returned false")
+            val after = TagIO.read(file)
+            assertTrue(after.hasArtwork, "$name: artwork must be readable after write")
+            assertEquals(200, after.artworkWidth, "$name: artwork width")
+            assertEquals(200, after.artworkHeight, "$name: artwork height")
+        }
+    }
+
+    /**
+     * Regression: editing only text/lyrics must never cost the file its cover.
+     * (Users reported covers disappearing after a tag edit.)
+     */
+    @Test
+    fun artworkSurvivesTextOnlyWrite() {
+        val jpeg = javaClass.classLoader!!.getResourceAsStream("tag/coverart.jpg")!!.use { it.readBytes() }
+        for (name in listOf("testV2L3Stereo.mp3", "test3.flac", "issue-198.m4a", "test.ogg")) {
+            val file = copy(name)
+            val withCover = TagEdit()
+            withCover.put(FieldKey.TITLE, "cover test")
+            withCover.artworkBytes = jpeg
+            withCover.artworkMime = "image/jpeg"
+            withCover.replaceArtwork = true
+            assertTrue(TagIO.write(file, withCover, fullWrite = true) { }, "$name: cover write")
+            assertTrue(TagIO.read(file).hasArtwork, "$name: cover after insert")
+
+            val textOnly = TagEdit()
+            textOnly.put(FieldKey.ARTIST, "가수만 변경")
+            textOnly.plainLyrics = "plain lyric line"
+            textOnly.replacePlainLyrics = true
+            assertTrue(TagIO.write(file, textOnly, fullWrite = false) { }, "$name: text write")
+
+            val after = TagIO.read(file)
+            assertTrue(after.hasArtwork, "$name: cover must survive a text-only write")
+            assertEquals(jpeg.size, after.artworkBytes, "$name: cover bytes must be unchanged")
+            assertEquals("가수만 변경", after.artist, "$name: artist")
+        }
+    }
+
+    /** A (higher quality) replacement cover ends up in the file, the old one is gone. */
+    @Test
+    fun artworkCanBeReplaced() {
+        val jpeg = javaClass.classLoader!!.getResourceAsStream("tag/coverart.jpg")!!.use { it.readBytes() }
+        // 1x1 PNG, used as a stand-in "different cover"
+        val png = java.util.Base64.getDecoder().decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAwMCAO+ip1sAAAAASUVORK5CYII="
+        )
+        for (name in listOf("testV2L3Stereo.mp3", "test3.flac", "issue-198.m4a")) {
+            val file = copy(name)
+            val first = TagEdit()
+            first.artworkBytes = jpeg
+            first.artworkMime = "image/jpeg"
+            first.replaceArtwork = true
+            assertTrue(TagIO.write(file, first, fullWrite = true) { }, "$name: first cover")
+
+            val replacement = TagEdit()
+            replacement.artworkBytes = png
+            replacement.artworkMime = "image/png"
+            replacement.replaceArtwork = true
+            assertTrue(TagIO.write(file, replacement, fullWrite = false) { }, "$name: replace cover")
+
+            val after = TagIO.read(file)
+            assertTrue(after.hasArtwork, "$name: cover after replace")
+            assertEquals(png.size, after.artworkBytes, "$name: cover must be the replacement")
+            assertEquals(1, after.artworkWidth, "$name: replacement width")
         }
     }
 
