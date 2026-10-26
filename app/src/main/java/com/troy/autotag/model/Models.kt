@@ -99,6 +99,11 @@ data class ExistingTags(
     var lyrics: String? = null,
     var hasSyncedLyrics: Boolean = false,
     var hasArtwork: Boolean = false,
+    /** Size of the embedded front cover, used to judge upgrade candidates. */
+    var artworkBytes: Int = 0,
+    var artworkWidth: Int = 0,
+    var artworkHeight: Int = 0,
+    var artworkMime: String? = null,
     var isrc: String? = null,
     var mbTrackId: String? = null,
     var durationSec: Int = 0,
@@ -114,7 +119,11 @@ data class ExistingTags(
         if (year != null) parts.add("연도=$year")
         if (hasSyncedLyrics) parts.add("싱크가사")
         else if (!lyrics.isNullOrBlank()) parts.add("가사")
-        if (hasArtwork) parts.add("커버")
+        if (hasArtwork) {
+            parts.add(
+                if (artworkWidth > 0 && artworkHeight > 0) "커버(${artworkWidth}x$artworkHeight)" else "커버"
+            )
+        }
         if (parts.isEmpty()) parts.add("태그없음")
         return parts.joinToString(" | ")
     }

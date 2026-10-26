@@ -8,7 +8,6 @@ import com.troy.autotag.model.str
 import com.troy.autotag.net.Http
 import com.troy.autotag.util.TextTools
 import org.json.JSONObject
-import java.net.URLEncoder
 
 /**
  * AcoustID lookup. A fingerprint identifies the exact recording, so when this
@@ -18,28 +17,65 @@ object AcoustIdSource {
 
     data class Result(val meta: Meta, val releaseId: String?, val recordingId: String?)
 
+    /**
+     * API 키가 서버에서 거부된 경우 그 키로는 더 요청하지 않는다.
+     * 배치 내내 파일마다 같은 실패를 반복(및 로그 도배)하지 않기 위함이며,
+     * 키가 바뀌면(다른 값으로 호출되면) 자동으로 다시 시도한다.
+     */
+    @Volatile
+    private var rejectedKey: String? = null
+
     fun lookup(
         clientKey: String,
         fingerprint: String,
         durationSec: Int,
         threshold: Double,
         log: (String) -> Unit,
-        fetch: (String) -> String? = Http::get,
+        post: (String, Map<String, String>) -> Http.Response? = Http::postForm,
     ): Result? {
         if (clientKey.isBlank() || fingerprint.isBlank() || durationSec <= 0) return null
-        val url = "https://api.acoustid.org/v2/lookup?format=json" +
-            "&client=" + URLEncoder.encode(clientKey, "UTF-8") +
-            "&duration=" + durationSec +
-            "&fingerprint=" + URLEncoder.encode(fingerprint, "UTF-8") +
-            "&meta=recordings+releasegroups+releases+tracks+recordingids"
-        val body = fetch(url) ?: run {
-            log("  AcoustID: 요청 실패")
+        if (rejectedKey == clientKey) return null // 이미 거부된 키: 조용히 생략
+        // 지문은 길어서(120초 분량에 수천 자) GET URL에 실으면 서버/프록시가
+        // 거부할 수 있다. AcoustID 공식 방식인 POST 폼 전송을 쓴다.
+        val fields = linkedMapOf(
+            "format" to "json",
+            "client" to clientKey,
+            "duration" to durationSec.toString(),
+            "fingerprint" to fingerprint,
+            "meta" to "recordings+releasegroups+releases+tracks+recordingids",
+        )
+        val response = post("https://api.acoustid.org/v2/lookup", fields) ?: run {
+            log("  AcoustID: 요청 실패 (네트워크 오류 — 연결을 확인하세요)")
             return null
         }
-        val json = try {
-            JSONObject(body)
-        } catch (t: Throwable) {
-            log("  AcoustID: 응답 파싱 실패")
+        val body = response.text()
+        val json = body?.let {
+            try {
+                JSONObject(it)
+            } catch (t: Throwable) {
+                null
+            }
+        }
+        if (!response.isSuccess || json == null) {
+            val error = json?.obj("error")
+            val message = error?.str("message") ?: ""
+            val code = error?.int("code")
+            when {
+                // 잘못된/비활성화된 API 키: 원인을 알리고 이 키로는 중단한다.
+                code == 4 || message.contains("api key", ignoreCase = true) ||
+                    response.code == 401 || response.code == 403 -> {
+                    rejectedKey = clientKey
+                    log("  AcoustID: API 키가 거부됨 (HTTP ${response.code}${if (message.isNotBlank()) ": $message" else ""}) — 설정에서 AcoustID API 키를 확인하세요. 이번 작업에서는 AcoustID를 건너뜁니다")
+                }
+                message.isNotBlank() ->
+                    log("  AcoustID: 오류 (HTTP ${response.code}: $message)")
+                json == null && body.isNullOrBlank() ->
+                    log("  AcoustID: 요청 실패 (HTTP ${response.code})")
+                json == null ->
+                    log("  AcoustID: 응답 파싱 실패 (HTTP ${response.code})")
+                else ->
+                    log("  AcoustID: 요청 실패 (HTTP ${response.code})")
+            }
             return null
         }
         if (json.str("status") != "ok") {

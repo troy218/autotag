@@ -524,6 +524,7 @@ class MainActivity : Activity() {
         container.addView(title)
 
         addCheck("AcoustID 지문 사용 (우선)", { prefs.useAcoustId }) { prefs.useAcoustId = it }
+        addCheck("벅스(Bugs) 검색 (국내 음원 우선)", { prefs.useBugs }) { prefs.useBugs = it }
         addCheck("MusicBrainz 검색", { prefs.useMusicBrainz }) { prefs.useMusicBrainz = it }
         addCheck("iTunes 검색 (커버/트랙번호)", { prefs.useItunes }) { prefs.useItunes = it }
         addCheck("Deezer 검색 (보조)", { prefs.useDeezer }) { prefs.useDeezer = it }
@@ -543,6 +544,7 @@ class MainActivity : Activity() {
         addCheck("싱크가사 우선", { prefs.preferSyncedLyrics }) { prefs.preferSyncedLyrics = it }
         addCheck(".lrc 파일도 생성", { prefs.writeLrcSidecar }) { prefs.writeLrcSidecar = it }
         addCheck("커버 이미지 삽입", { prefs.embedArtwork }) { prefs.embedArtwork = it }
+        addCheck("더 고화질 커버가 있으면 교체", { prefs.upgradeArtwork }) { prefs.upgradeArtwork = it }
         addCheck("원본 .bak 백업", { prefs.backupOriginal }) { prefs.backupOriginal = it }
         addCheck("MusicBrainz ID 기록", { prefs.writeMbIds }) { prefs.writeMbIds = it }
 

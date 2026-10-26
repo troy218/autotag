@@ -84,7 +84,31 @@ object TagIO {
             (tag is AbstractID3v2Tag && tag.hasField("SYLT")) ||
                 Lrc.isSynced(existing.lyrics)
         }.getOrDefault(false)
-        existing.hasArtwork = runCatching { tag.firstArtwork != null }.getOrDefault(false)
+        val artwork = runCatching { tag.firstArtwork }.getOrNull()
+        existing.hasArtwork = artwork != null
+        if (artwork != null) {
+            val data = runCatching { artwork.binaryData }.getOrNull()
+            if (data != null && data.isNotEmpty()) {
+                existing.artworkBytes = data.size
+                // jaudiotagger often leaves width/height at 0 (esp. ID3 APIC),
+                // so fall back to parsing the image header ourselves.
+                val declaredW = runCatching { artwork.width }.getOrDefault(0)
+                val declaredH = runCatching { artwork.height }.getOrDefault(0)
+                if (declaredW > 0 && declaredH > 0) {
+                    existing.artworkWidth = declaredW
+                    existing.artworkHeight = declaredH
+                } else {
+                    val parsed = com.troy.autotag.util.ImageInfo.dimensions(data)
+                    if (parsed != null) {
+                        existing.artworkWidth = parsed.width
+                        existing.artworkHeight = parsed.height
+                    }
+                }
+                existing.artworkMime = runCatching { artwork.mimeType }.getOrNull()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: com.troy.autotag.util.ImageInfo.mimeOf(data)
+            }
+        }
         return existing
     }
 
@@ -124,6 +148,12 @@ object TagIO {
             return false
         }
 
+        // Snapshot the existing cover *before* touching anything. Some
+        // containers/formats lose their picture when the tag is rewritten,
+        // and an artwork write that fails halfway must never cost the user
+        // the cover they already had — we restore from this snapshot.
+        val originalArtworks = snapshotArtwork(target)
+
         var changed = false
         for ((key, value) in edit.textFields) {
             if (value.isBlank()) continue
@@ -151,6 +181,7 @@ object TagIO {
         }
 
         // ---- artwork -----------------------------------------------------
+        var artworkApplied = false
         edit.artworkBytes?.let { bytes ->
             val artwork = AndroidArtwork()
             artwork.binaryData = bytes
@@ -162,9 +193,24 @@ object TagIO {
                 target.setField(artwork)
             }.onSuccess {
                 changed = true
+                artworkApplied = true
             }.onFailure {
                 log("      커버 저장 실패: ${it.message}")
+                // 삭제까지만 성공하고 새 커버 적용에 실패한 경우 기존 커버 복원
+                if (edit.replaceArtwork && originalArtworks.isNotEmpty() &&
+                    snapshotArtwork(target).isEmpty()
+                ) {
+                    restoreArtwork(target, originalArtworks)
+                    log("      기존 커버를 유지합니다")
+                }
             }
+        }
+        if (edit.artworkBytes == null && originalArtworks.isNotEmpty() &&
+            snapshotArtwork(target).isEmpty()
+        ) {
+            // 텍스트/가사만 고쳤는데 태그 객체에서 커버가 사라진 경우
+            restoreArtwork(target, originalArtworks)
+            log("      기존 커버 복원(쓰기 중 유실 방지)")
         }
 
         if (!changed) return false
@@ -174,7 +220,84 @@ object TagIO {
                 log("      파일 저장 실패: ${it.message}")
                 return false
             }
+
+        // ---- verify: the cover must still be there after the rewrite ------
+        val shouldHaveArtwork = artworkApplied || originalArtworks.isNotEmpty()
+        if (shouldHaveArtwork && !fileHasArtwork(file)) {
+            val restoreWith = when {
+                artworkApplied && edit.artworkBytes != null ->
+                    listOf(ArtworkSnapshot(edit.artworkBytes!!, edit.artworkMime, 3))
+                else -> originalArtworks
+            }
+            log("      ! 저장 후 커버가 확인되지 않아 복원을 시도합니다")
+            if (restoreWith.isNotEmpty() && repairArtwork(file, restoreWith)) {
+                log("      ✓ 커버 복원 완료")
+            } else {
+                log("      ! 커버 복원 실패 — 원본 백업(.bak)으로 되돌릴 수 있습니다")
+            }
+        }
         return true
+    }
+
+    // ------------------------------------------------------------- artwork care
+
+    private class ArtworkSnapshot(
+        val bytes: ByteArray,
+        val mime: String?,
+        val pictureType: Int,
+    )
+
+    private fun snapshotArtwork(tag: Tag): List<ArtworkSnapshot> {
+        val list = runCatching { tag.artworkList }.getOrNull() ?: return emptyList()
+        val out = ArrayList<ArtworkSnapshot>()
+        for (artwork in list) {
+            val data = runCatching { artwork.binaryData }.getOrNull()
+            if (data == null || data.isEmpty()) continue
+            out.add(
+                ArtworkSnapshot(
+                    bytes = data,
+                    mime = runCatching { artwork.mimeType }.getOrNull()?.takeIf { it.isNotBlank() }
+                        ?: com.troy.autotag.util.ImageInfo.mimeOf(data),
+                    pictureType = runCatching { artwork.pictureType }.getOrDefault(3)
+                        .takeIf { it in 0..20 } ?: 3, // 3 = Cover (front)
+                )
+            )
+        }
+        return out
+    }
+
+    private fun restoreArtwork(tag: Tag, snapshots: List<ArtworkSnapshot>): Boolean {
+        // setField() replaces the front cover in every format we support, so
+        // restoring more than the first picture would just overwrite it again.
+        val snapshot = snapshots.firstOrNull() ?: return false
+        val artwork = AndroidArtwork()
+        artwork.binaryData = snapshot.bytes
+        artwork.mimeType = snapshot.mime ?: "image/jpeg"
+        artwork.pictureType = snapshot.pictureType
+        runCatching { artwork.setImageFromData() }
+        return runCatching { tag.setField(artwork) }.isSuccess
+    }
+
+    private fun fileHasArtwork(file: File): Boolean {
+        val reopened = runCatching { AudioFileIO.read(file) }.getOrNull() ?: return false
+        val tag = reopened.tag ?: return false
+        return runCatching { tag.firstArtwork != null }.getOrDefault(false)
+    }
+
+    /** Re-opens a written file and writes nothing but the cover back into it. */
+    private fun repairArtwork(file: File, snapshots: List<ArtworkSnapshot>): Boolean {
+        val audioFile = runCatching { AudioFileIO.read(file) }.getOrNull()
+            ?: runCatching { AudioFileIO.readMagic(file) }.getOrNull()
+            ?: return false
+        var tag: Tag? = audioFile.tag
+        if (tag == null || tag is org.jaudiotagger.tag.id3.ID3v1Tag) {
+            tag = runCatching { audioFile.createDefaultTag() }.getOrNull() ?: return false
+            audioFile.setTag(tag)
+        }
+        val target = tag ?: return false
+        if (!restoreArtwork(target, snapshots)) return false
+        audioFile.setTag(target)
+        return runCatching { AudioFileIO.write(audioFile) }.isSuccess && fileHasArtwork(file)
     }
 
     private fun isSame(tag: Tag, key: FieldKey, value: String): Boolean {
