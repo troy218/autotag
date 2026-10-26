@@ -9,7 +9,8 @@ import java.io.ByteArrayOutputStream
 /** Downloads cover art and keeps it small enough to embed. */
 object ArtworkFetcher {
 
-    private val cache = HashMap<String, ByteArray>()
+    // 여러 스레드(식별/쓰기 풀)가 동시에 부르므로 스레드 안전 맵을 쓴다.
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
 
     class Artwork(val bytes: ByteArray, val mime: String) {
         /** Pixel size of [bytes] (0 when it could not be determined). */

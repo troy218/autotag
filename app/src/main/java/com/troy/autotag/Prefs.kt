@@ -112,6 +112,11 @@ class Prefs(context: Context) {
         get() = sp.getInt("artwork_max_size", 1000)
         set(value) = sp.edit().putInt("artwork_max_size", value).apply()
 
+    /** 배터리 최적화 제외 안내를 이미 보여 줬는지 (삼성 One UI 절전 대응). */
+    var batteryHintSeen: Boolean
+        get() = sp.getBoolean("battery_hint_seen", false)
+        set(value) = sp.edit().putBoolean("battery_hint_seen", value).apply()
+
     /** Learned "raw spelling -> canonical spelling" artist aliases. */
     var artistAliases: MutableMap<String, String>
         get() = readMap("artist_aliases")

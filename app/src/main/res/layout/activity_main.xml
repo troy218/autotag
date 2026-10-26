@@ -2,163 +2,182 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
     android:orientation="vertical"
-    android:padding="8dp">
+    android:padding="12dp">
 
+    <!-- 제목 + 설정 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="AutoTag"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnSettings"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="설정"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <!-- 권한/상태 한 줄 (누르면 권한 안내) -->
     <TextView
         android:id="@+id/statusText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textSize="12sp"
-        android:textStyle="bold"
-        android:text="권한 확인 중…" />
+        android:paddingTop="2dp"
+        android:paddingBottom="6dp"
+        android:text="권한 확인 중…"
+        android:textSize="12sp" />
 
+    <!-- 불러오기 (기기 전체/폴더/파일 중 선택) -->
+    <Button
+        android:id="@+id/btnAdd"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="＋ 음악 불러오기"
+        android:textSize="15sp" />
+
+    <!-- 목록 헤더: 개수/안내 + 비우기 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingTop="8dp">
 
-        <Button
-            android:id="@+id/btnPermission"
+        <TextView
+            android:id="@+id/listHeaderText"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:textSize="11sp"
-            android:text="권한" />
-
-        <Button
-            android:id="@+id/btnScanMusic"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:textSize="11sp"
-            android:text="음악 전체" />
-
-        <Button
-            android:id="@+id/btnPickFolder"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:textSize="11sp"
-            android:text="폴더" />
-
-        <Button
-            android:id="@+id/btnPickFiles"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:textSize="11sp"
-            android:text="파일" />
-    </LinearLayout>
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/btnSettings"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:textSize="11sp"
-            android:text="설정" />
-
-        <Button
-            android:id="@+id/btnSelectAll"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:textSize="11sp"
-            android:text="전체선택" />
+            android:text="파일 없음"
+            android:textSize="12sp" />
 
         <Button
             android:id="@+id/btnClear"
-            android:layout_width="0dp"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:textSize="11sp"
-            android:text="목록지우기" />
-
-        <Button
-            android:id="@+id/btnStop"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:textSize="11sp"
-            android:enabled="false"
-            android:text="중지" />
+            android:text="비우기"
+            android:textSize="11sp" />
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/selectionText"
+    <!-- 선택 모드일 때만 보이는 바 -->
+    <LinearLayout
+        android:id="@+id/selectionBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textSize="11sp"
-        android:paddingTop="2dp"
-        android:paddingBottom="2dp"
-        android:text="파일 0개" />
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/btnSelAll"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="전체 선택"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btnSelNone"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="선택 해제"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btnSelDone"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="완료"
+            android:textSize="12sp" />
+    </LinearLayout>
 
     <ListView
         android:id="@+id/fileList"
         android:layout_width="match_parent"
         android:layout_height="0dp"
+        android:layout_marginTop="4dp"
         android:layout_weight="1"
-        android:layout_marginTop="2dp"
-        android:choiceMode="multipleChoice"
-        android:background="#FFFFFF" />
+        android:choiceMode="multipleChoice" />
 
+    <!-- 진행 표시 (작업 중일 때만) -->
     <ProgressBar
         android:id="@+id/progressBar"
         style="?android:attr/progressBarStyleHorizontal"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:max="100"
-        android:progress="0" />
+        android:progress="0"
+        android:visibility="gone" />
 
     <TextView
         android:id="@+id/currentText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:textSize="11sp"
-        android:text="" />
+        android:visibility="gone" />
 
-    <ScrollView
-        android:id="@+id/logScroll"
-        android:layout_width="match_parent"
-        android:layout_height="150dp"
-        android:background="#111111">
-
-        <TextView
-            android:id="@+id/logText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:padding="4dp"
-            android:textColor="#DDDDDD"
-            android:textIsSelectable="true"
-            android:textSize="9sp"
-            android:typeface="monospace" />
-    </ScrollView>
-
+    <!-- 로그 접기/펴기 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal">
 
         <Button
-            android:id="@+id/btnStart"
+            android:id="@+id/btnLogToggle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_weight="2"
-            android:textStyle="bold"
-            android:text="태그 채우기 시작" />
+            android:layout_weight="1"
+            android:text="로그 보기"
+            android:textSize="11sp" />
 
         <Button
             android:id="@+id/btnCopyLog"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:text="로그 복사"
             android:textSize="11sp"
-            android:text="로그복사" />
+            android:visibility="gone" />
     </LinearLayout>
+
+    <ScrollView
+        android:id="@+id/logScroll"
+        android:layout_width="match_parent"
+        android:layout_height="160dp"
+        android:background="#111111"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/logText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="6dp"
+            android:textColor="#DDDDDD"
+            android:textIsSelectable="true"
+            android:textSize="10sp"
+            android:typeface="monospace" />
+    </ScrollView>
+
+    <!-- 시작/중지 겸용 큰 버튼 -->
+    <Button
+        android:id="@+id/btnStart"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_marginTop="8dp"
+        android:text="태그 채우기"
+        android:textSize="16sp"
+        android:textStyle="bold" />
 </LinearLayout>
