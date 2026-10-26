@@ -14,28 +14,22 @@
 
 ## 빌드 (APK)
 
-**최초 1회 준비 (중요)**: 이 저장소에는 아직 `.github/workflows/build.yml` 이 없습니다.
-`ci/build.yml` 파일 내용을 그대로 `.github/workflows/build.yml` 로 만들어 주세요
-(GitHub 웹: `Add file → Create new file` → 경로 `.github/workflows/build.yml` → `ci/build.yml` 내용 붙여넣기 → Commit).
-한 번만 하면 이후에는 push 할 때마다 APK가 자동으로 만들어집니다.
-
-GitHub Actions에서 자동 빌드됩니다.
-
-- 평소: `Actions → Build APK` 가 push 때마다 실행되고, 결과물은 Artifacts의
-  `autotag-debug-apk` 입니다.
-- 수동 실행(`workflow_dispatch`) 또는 `main` 브랜치 빌드 시 **Releases → apk-latest** 에
-  APK가 올라갑니다. 폰에서 그 APK를 내려받아 설치하면 됩니다(출처를 알 수 없는 앱 허용 필요).
-
-테스트도 같은 워크플로에서 실행됩니다(`gradle :fp:test :app:testDebugUnitTest`).
-`app` 쪽 테스트는 안드로이드 기기 없이 JVM에서 실제 오디오 파일의 태그를 쓰고 다시 읽어
-검증합니다.
-
-로컬 빌드:
+Android Studio 또는 로컬 Gradle로 직접 빌드합니다 (CI 워크플로는 두지 않았습니다).
 
 ```bash
-gradle :app:assembleDebug        # Gradle 8.7, JDK 17 필요
-# 결과: app/build/outputs/apk/debug/app-debug.apk
+# JDK 17 + Gradle 8.7 (또는 Android Studio에서 프로젝트 열고 Run)
+gradle :app:assembleDebug
+# 결과: app/build/outputs/apk/debug/app-debug.apk  → 폰에 복사해서 설치
 ```
+
+테스트 (기기 없이 JVM에서 실행):
+
+```bash
+gradle :fp:test :app:testDebugUnitTest
+```
+
+- `:fp:test` — Chromaprint(지문) 포팅을 chromaprint 1.5.1 공식 테스트 데이터와 대조
+- `:app:testDebugUnitTest` — 실제 오디오 샘플(mp3/flac/ogg/wav/m4a)에 태그를 쓰고 다시 읽어 검증
 
 ## 사용법
 
