@@ -29,6 +29,7 @@ object MusicBrainzSource {
         artist: String?,
         durationSec: Int?,
         log: (String) -> Unit,
+        fetch: (String) -> String? = Http::get,
     ): Meta? {
         if (title.isBlank()) return null
         val query = buildString {
@@ -42,7 +43,7 @@ object MusicBrainzSource {
             }
         }
         val url = "https://musicbrainz.org/ws/2/recording?fmt=json&limit=8&query=" + encode(query)
-        val body = Http.get(url) ?: return null
+        val body = fetch(url) ?: return null
         val json = try {
             JSONObject(body)
         } catch (t: Throwable) {
@@ -111,11 +112,15 @@ object MusicBrainzSource {
     }
 
     /** Fills genre / label / total counts / track number from the release. */
-    fun enrichFromRelease(meta: Meta, recordingTitle: String?): Meta {
+    fun enrichFromRelease(
+        meta: Meta,
+        recordingTitle: String?,
+        fetch: (String) -> String? = Http::get,
+    ): Meta {
         val releaseId = meta.mbReleaseId ?: return meta
         val url =
             "https://musicbrainz.org/ws/2/release/$releaseId?inc=recordings+artist-credits+genres+labels&fmt=json"
-        val body = Http.get(url) ?: return meta
+        val body = fetch(url) ?: return meta
         val json = try {
             JSONObject(body)
         } catch (t: Throwable) {

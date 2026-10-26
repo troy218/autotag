@@ -22,6 +22,7 @@ object LrclibSource {
         durationSec: Int?,
         preferSynced: Boolean,
         log: (String) -> Unit,
+        fetch: (String) -> String? = Http::get,
     ): LyricsResult? {
         if (title.isBlank()) return null
 
@@ -44,7 +45,7 @@ object LrclibSource {
                     append(durationSec)
                 }
             }
-            val body = Http.get(exact)
+            val body = fetch(exact)
             if (body != null) {
                 val json = runCatching { JSONObject(body) }.getOrNull()
                 val result = json?.let { parse(it, "LRCLIB") }
@@ -71,7 +72,7 @@ object LrclibSource {
             "UTF-8",
         ))
         for (url in searchUrls) {
-            val body = Http.get(url) ?: continue
+            val body = fetch(url) ?: continue
             val array = runCatching { org.json.JSONArray(body) }.getOrNull() ?: continue
             val candidates = ArrayList<Pair<Double, LyricsResult>>()
             for (i in 0 until array.length()) {

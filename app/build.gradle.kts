@@ -63,6 +63,8 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation(kotlin("test"))
+    // the android.jar used for unit tests only contains org.json stubs
+    testImplementation("org.json:json:20231013")
 }
 
 tasks.withType<JavaCompile>().configureEach {

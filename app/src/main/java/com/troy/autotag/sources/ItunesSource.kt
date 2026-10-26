@@ -23,14 +23,15 @@ object ItunesSource {
         durationSec: Int?,
         country: String,
         log: (String) -> Unit,
+        fetch: (String) -> String? = Http::get,
     ): Meta? {
         val terms = listOfNotNull(artist?.takeIf { it.isNotBlank() }, title)
         if (terms.isEmpty()) return null
         val term = terms.joinToString(" ")
         val url = buildUrl(term, country)
-        var items = fetch(url)
+        var items = fetchItems(url, fetch)
         if (items.isEmpty() && country != "US") {
-            items = fetch(buildUrl(term, "US"))
+            items = fetchItems(buildUrl(term, "US"), fetch)
         }
         if (items.isEmpty()) {
             log("  iTunes: 결과 없음")
@@ -90,12 +91,17 @@ object ItunesSource {
      * Looks up an album's track list, used to fill in missing track numbers of
      * the other tracks of the same album.
      */
-    fun albumTracks(album: String, artist: String?, country: String): Map<String, Meta> {
+    fun albumTracks(
+        album: String,
+        artist: String?,
+        country: String,
+        fetch: (String) -> String? = Http::get,
+    ): Map<String, Meta> {
         val term = listOfNotNull(artist?.takeIf { it.isNotBlank() }, album).joinToString(" ")
         val url = "https://itunes.apple.com/search?media=music&entity=song&limit=50" +
             "&country=" + URLEncoder.encode(country, "UTF-8") +
             "&attribute=albumTerm&term=" + URLEncoder.encode(term, "UTF-8")
-        val items = fetch(url)
+        val items = fetchItems(url, fetch)
         if (items.isEmpty()) return emptyMap()
         val out = LinkedHashMap<String, Meta>()
         for (item in items) {
@@ -126,8 +132,8 @@ object ItunesSource {
             "&country=" + URLEncoder.encode(country, "UTF-8") +
             "&term=" + URLEncoder.encode(term, "UTF-8")
 
-    private fun fetch(url: String): List<JSONObject> {
-        val body = Http.get(url) ?: return emptyList()
+    private fun fetchItems(url: String, fetch: (String) -> String?): List<JSONObject> {
+        val body = fetch(url) ?: return emptyList()
         val json = try {
             JSONObject(body)
         } catch (t: Throwable) {

@@ -24,6 +24,7 @@ object AcoustIdSource {
         durationSec: Int,
         threshold: Double,
         log: (String) -> Unit,
+        fetch: (String) -> String? = Http::get,
     ): Result? {
         if (clientKey.isBlank() || fingerprint.isBlank() || durationSec <= 0) return null
         val url = "https://api.acoustid.org/v2/lookup?format=json" +
@@ -31,7 +32,7 @@ object AcoustIdSource {
             "&duration=" + durationSec +
             "&fingerprint=" + URLEncoder.encode(fingerprint, "UTF-8") +
             "&meta=recordings+releasegroups+releases+tracks+recordingids"
-        val body = Http.get(url) ?: run {
+        val body = fetch(url) ?: run {
             log("  AcoustID: 요청 실패")
             return null
         }

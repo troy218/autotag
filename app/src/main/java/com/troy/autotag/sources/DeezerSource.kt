@@ -18,6 +18,7 @@ object DeezerSource {
         artist: String?,
         durationSec: Int?,
         log: (String) -> Unit,
+        fetch: (String) -> String? = Http::get,
     ): Meta? {
         val query = buildString {
             append("track:\"")
@@ -30,7 +31,7 @@ object DeezerSource {
             }
         }
         val url = "https://api.deezer.com/search?limit=10&q=" + URLEncoder.encode(query, "UTF-8")
-        val body = Http.get(url) ?: return null
+        val body = fetch(url) ?: return null
         val json = try {
             JSONObject(body)
         } catch (t: Throwable) {
@@ -77,7 +78,7 @@ object DeezerSource {
 
         val albumId = album?.str("id") ?: album?.int("id")?.toString()
         if (albumId != null) {
-            fillFromAlbum(meta, albumId)
+            fillFromAlbum(meta, albumId, fetch)
         }
         log("  Deezer: ${meta.artist} - ${meta.title} (${bestScore.toInt()}점)")
         return meta
@@ -86,8 +87,12 @@ object DeezerSource {
     /**
      * Fills track/disc numbers, genre, label and total counts from the album.
      */
-    fun fillFromAlbum(meta: Meta, albumId: String): Meta {
-        val body = Http.get("https://api.deezer.com/album/$albumId") ?: return meta
+    fun fillFromAlbum(
+        meta: Meta,
+        albumId: String,
+        fetch: (String) -> String? = Http::get,
+    ): Meta {
+        val body = fetch("https://api.deezer.com/album/$albumId") ?: return meta
         val json = try {
             JSONObject(body)
         } catch (t: Throwable) {
@@ -130,7 +135,11 @@ object DeezerSource {
     }
 
     /** Returns the track list of an album keyed by normalized title. */
-    fun albumTracks(album: String, artist: String?): Map<String, Meta> {
+    fun albumTracks(
+        album: String,
+        artist: String?,
+        fetch: (String) -> String? = Http::get,
+    ): Map<String, Meta> {
         val query = buildString {
             if (!artist.isNullOrBlank()) {
                 append("artist:\"")
@@ -141,7 +150,7 @@ object DeezerSource {
             append(album.replace("\"", ""))
             append("\"")
         }
-        val body = Http.get("https://api.deezer.com/search/album?limit=5&q=" + URLEncoder.encode(query, "UTF-8"))
+        val body = fetch("https://api.deezer.com/search/album?limit=5&q=" + URLEncoder.encode(query, "UTF-8"))
             ?: return emptyMap()
         val json = try {
             JSONObject(body)
@@ -159,7 +168,7 @@ object DeezerSource {
             }
         }
         if (albumId == null) return emptyMap()
-        val albumBody = Http.get("https://api.deezer.com/album/$albumId") ?: return emptyMap()
+        val albumBody = fetch("https://api.deezer.com/album/$albumId") ?: return emptyMap()
         val albumJson = try {
             JSONObject(albumBody)
         } catch (t: Throwable) {
