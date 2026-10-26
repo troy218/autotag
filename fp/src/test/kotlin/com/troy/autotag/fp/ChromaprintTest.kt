@@ -1,14 +1,20 @@
 package com.troy.autotag.fp
 
 import java.io.File
+import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * Reference tests against the test data and expected values shipped with
  * acoustid/chromaprint 1.5.1 (see fp/third_party_chromaprint_LICENSE.md).
+ *
+ * The chromagram comparison is the important one: it validates the whole
+ * signal path (resampler -> window -> FFT -> chroma -> normalisation) against
+ * the C++ reference implementation with a 1e-5 tolerance.
  */
 class ChromaprintTest {
 
@@ -21,7 +27,7 @@ class ChromaprintTest {
     private fun toShortsLE(bytes: ByteArray): ShortArray {
         val out = ShortArray(bytes.size / 2)
         for (i in out.indices) {
-            out[i] = (((bytes[2 * i].toInt() and 0xff) or (bytes[2 * i + 1].toInt() shl 8))).toShort()
+            out[i] = ((bytes[2 * i].toInt() and 0xff) or (bytes[2 * i + 1].toInt() shl 8)).toShort()
         }
         return out
     }
@@ -33,71 +39,147 @@ class ChromaprintTest {
         return processor.finish()
     }
 
+    private fun repeat(pcm: ShortArray, times: Int): ShortArray {
+        val out = ShortArray(pcm.size * times)
+        for (i in 0 until times) System.arraycopy(pcm, 0, out, i * pcm.size, pcm.size)
+        return out
+    }
+
     @Test
     fun chromagramMatchesReferenceImplementation() {
         val stereo = toShortsLE(resource("test_stereo_44100.raw"))
         val mono = mono11025(stereo, 44100, 2)
+        assertEquals(22040, mono.size, "resampled sample count")
         val image = Chromaprint.buildImage(mono, applyChromaFilter = false)
-
         assertEquals(14, image.size, "number of chroma rows")
 
         for (row in expected.indices) {
             for (col in 0 until 12) {
-                val actual = image[row][col]
-                val want = expected[row][col]
                 assertTrue(
-                    kotlin.math.abs(actual - want) <= 1e-5,
-                    "chroma mismatch at [$row][$col]: expected $want, got $actual",
+                    abs(image[row][col] - expected[row][col]) <= 1e-5,
+                    "chroma mismatch at [$row][$col]: expected ${expected[row][col]}, got ${image[row][col]}",
                 )
             }
         }
     }
 
     @Test
-    fun compressionMatchesReferenceVector() {
-        // chromaprint tests/test_api.cpp: TestEncodeFingerprint / TestEncodeFingerprintBase64
-        val compressed = Chromaprint.compressForTest(intArrayOf(1, 0), 55)
-        val expectedBytes = byteArrayOf(55, 0, 0, 2, 65, 0)
-        assertEquals(expectedBytes.toList(), compressed.toList())
-        assertEquals("NwAAAkEA", Chromaprint.base64Encode(compressed))
+    fun compressionMatchesReferenceVectors() {
+        // chromaprint tests/test_fingerprint_compressor.cpp
+        val cases = listOf(
+            intArrayOf(1) to byteArrayOf(0, 0, 0, 1, 1),
+            intArrayOf(7) to byteArrayOf(0, 0, 0, 1, 73, 0),
+            intArrayOf(1 shl 6) to byteArrayOf(0, 0, 0, 1, 7, 0),
+            intArrayOf(1 shl 8) to byteArrayOf(0, 0, 0, 1, 7, 2),
+            intArrayOf(1, 0) to byteArrayOf(0, 0, 0, 2, 65, 0),
+            intArrayOf(1, 1) to byteArrayOf(0, 0, 0, 2, 1, 0),
+        )
+        for ((raw, want) in cases) {
+            val actual = Chromaprint.compressForTest(raw, 0)
+            assertEquals(want.toList(), actual.toList(), "compress(${raw.joinToString(",")})")
+        }
+        assertEquals(
+            "NwAAAkEA",
+            Chromaprint.base64Encode(Chromaprint.compressForTest(intArrayOf(1, 0), 55)),
+        )
     }
 
     @Test
-    fun fingerprintIsStableForMono11025() {
+    fun integralImageAndFiltersMatchReference() {
+        // chromaprint tests/test_filter.cpp
+        val integral = RollingIntegralImage(4)
+        integral.addRow(doubleArrayOf(0.0, 1.0))
+        integral.addRow(doubleArrayOf(2.0, 3.0))
+        val filter = Filter(0, 0, 1, 1)
+        assertTrue(abs(filter.apply(integral, 0) - 0.0) < 1e-6)
+        assertTrue(abs(filter.apply(integral, 1) - 1.0986123) < 1e-6)
+    }
+
+    @Test
+    fun chromaFilterMatchesReference() {
+        // chromaprint tests/test_chroma_filter.cpp
+        fun row(a: Double, b: Double) = doubleArrayOf(a, b, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+        val blur2 = ChromaFilter(doubleArrayOf(0.5, 0.5))
+        val rows = ArrayList<DoubleArray>()
+        blur2.consume(row(0.0, 5.0))?.let { rows.add(it) }
+        blur2.consume(row(1.0, 6.0))?.let { rows.add(it) }
+        blur2.consume(row(2.0, 7.0))?.let { rows.add(it) }
+        assertEquals(2, rows.size)
+        assertTrue(abs(rows[0][0] - 0.5) < 1e-9)
+        assertTrue(abs(rows[1][0] - 1.5) < 1e-9)
+        assertTrue(abs(rows[0][1] - 5.5) < 1e-9)
+        assertTrue(abs(rows[1][1] - 6.5) < 1e-9)
+
+        val blur3 = ChromaFilter(doubleArrayOf(0.5, 0.7, 0.5))
+        val rows3 = ArrayList<DoubleArray>()
+        for (i in 0 until 4) blur3.consume(row(i.toDouble(), 5.0 + i))?.let { rows3.add(it) }
+        assertEquals(2, rows3.size)
+        assertTrue(abs(rows3[0][0] - 1.7) < 1e-9)
+        assertTrue(abs(rows3[1][0] - 3.4) < 1e-9)
+        assertTrue(abs(rows3[0][1] - 10.2) < 1e-9)
+        assertTrue(abs(rows3[1][1] - 11.9) < 1e-9)
+    }
+
+    @Test
+    fun shortClipHasNoSubFingerprint() {
+        // a sub-fingerprint needs 16 chroma frames, i.e. roughly 2.7 seconds
         val pcm = toShortsLE(resource("test_mono_11025.raw"))
-        val result = assertNotNull(Chromaprint.fingerprint(pcm, 11025, 1))
-        assertTrue(result.raw.size > 3, "fingerprint should have a few subfingerprints")
-        println("mono11025 fingerprint = ${result.encoded}")
-
-        // Optional verification against the real fpcalc, generated in CI:
-        //   fpcalc -raw -algorithm 2 -length 120 test_mono_11025.raw > expected.txt
-        val expectedFile = System.getenv("FP_EXPECTED_RAW_FILE")
-        if (expectedFile != null && File(expectedFile).exists()) {
-            val line = File(expectedFile).readText()
-                .lineSequence()
-                .firstOrNull { it.startsWith("FINGERPRINT=") }
-                ?.removePrefix("FINGERPRINT=")
-                ?.trim()
-            if (line != null && line.isNotEmpty()) {
-                val expectedRaw = line.split(",").map { it.trim().toLong().toInt() }.toIntArray()
-                val matching = expectedRaw.indices.count {
-                    it < result.raw.size && result.raw[it] == expectedRaw[it]
-                }
-                println("subfingerprints matching fpcalc: $matching / ${expectedRaw.size}")
-                assertTrue(
-                    matching * 100 >= expectedRaw.size * 98,
-                    "fingerprint deviates too much from fpcalc: $matching/${expectedRaw.size}",
-                )
-            }
-        }
+        assertNull(Chromaprint.fingerprint(pcm, 11025, 1))
     }
 
     @Test
-    fun fingerprintOfMono8000IsProduced() {
-        val pcm = toShortsLE(resource("test_mono_8000.raw"))
-        val result = assertNotNull(Chromaprint.fingerprint(pcm, 8000, 1))
-        assertTrue(result.raw.size > 3)
-        println("mono8000 fingerprint = ${result.encoded}")
+    fun longClipProducesExpectedNumberOfSubFingerprints() {
+        val pcm = repeat(toShortsLE(resource("test_mono_11025.raw")), 6)
+        val result = assertNotNull(Chromaprint.fingerprint(pcm, 11025, 1))
+        val frames = (pcm.size - 4096) / 1365 + 1
+        val expectedCount = frames - 4 - 16 + 1
+        assertEquals(expectedCount, result.raw.size)
+        assertTrue(result.encoded.isNotBlank())
+
+        // Same audio sampled at 44.1kHz must produce an almost identical fingerprint.
+        val pcm44 = repeat(toShortsLE(resource("test_mono_44100.raw")), 6)
+        val result44 = assertNotNull(Chromaprint.fingerprint(pcm44, 44100, 1))
+        val count = minOf(result.raw.size, result44.raw.size)
+        assertTrue(count > 40)
+        var bitErrors = 0L
+        for (i in 0 until count) bitErrors += Integer.bitCount(result.raw[i] xor result44.raw[i])
+        val averageBitErrors = bitErrors.toDouble() / count
+        println("average bit errors per sub-fingerprint: $averageBitErrors")
+        assertTrue(averageBitErrors < 3.0, "fingerprint too different across sample rates: $averageBitErrors")
+    }
+
+    @Test
+    fun stereoInputProducesFingerprint() {
+        val pcm = repeat(toShortsLE(resource("test_stereo_44100.raw")), 6)
+        val result = assertNotNull(Chromaprint.fingerprint(pcm, 44100, 2))
+        assertTrue(result.raw.size > 40)
+    }
+
+    /**
+     * Optional cross-check against the real `fpcalc` (installed in CI):
+     *   fpcalc -raw -algorithm 2 -length 120 long.raw > expected.txt   (long.raw = 6x test_mono_11025.raw)
+     * and the path exported as FP_EXPECTED_RAW_FILE.
+     */
+    @Test
+    fun fingerprintMatchesFpcalcWhenAvailable() {
+        val expectedFile = System.getenv("FP_EXPECTED_RAW_FILE") ?: return
+        if (!File(expectedFile).exists()) return
+        val line = File(expectedFile).readText()
+            .lineSequence()
+            .firstOrNull { it.startsWith("FINGERPRINT=") }
+            ?.removePrefix("FINGERPRINT=")
+            ?.trim()
+        if (line.isNullOrEmpty()) return
+
+        val pcm = repeat(toShortsLE(resource("test_mono_11025.raw")), 6)
+        val result = assertNotNull(Chromaprint.fingerprint(pcm, 11025, 1))
+        val expectedRaw = line.split(",").map { it.trim().toLong().toInt() }.toIntArray()
+        assertEquals(expectedRaw.size, result.raw.size, "sub-fingerprint count vs fpcalc")
+        val matching = expectedRaw.indices.count { result.raw[it] == expectedRaw[it] }
+        val ratio = matching.toDouble() / expectedRaw.size
+        println("identical sub-fingerprints vs fpcalc: $matching / ${expectedRaw.size}")
+        assertTrue(ratio >= 0.98, "fingerprint deviates from fpcalc: $matching/${expectedRaw.size}")
     }
 
     private companion object {

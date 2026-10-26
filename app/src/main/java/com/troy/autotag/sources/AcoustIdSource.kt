@@ -108,7 +108,8 @@ object AcoustIdSource {
                             for (t in 0 until tracks.length()) {
                                 val track = tracks.optJSONObject(t) ?: continue
                                 val title = track.str("title") ?: continue
-                                if (meta.title != null && TextTools.similarity(title, meta.title) >= 0.8) {
+                                val wantedTitle = meta.title
+                                if (wantedTitle != null && TextTools.similarity(title, wantedTitle) >= 0.8) {
                                     meta.track = track.int("position")
                                     break
                                 }

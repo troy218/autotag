@@ -376,7 +376,7 @@ class MainActivity : Activity() {
 
     private fun updateSelectionText() {
         val selected = selectedTracks().size
-        selectionText.text = "파일 ${tracks.size}개 · 선택 $selected개"
+        selectionText.text = "파일 ${tracks.size}개 · 선택 ${selected}개"
     }
 
     // ----------------------------------------------------------------- process
@@ -433,7 +433,7 @@ class MainActivity : Activity() {
                     renderList()
                     val okCount = selected.count { it.status.contains("변경") }
                     val failCount = selected.count { it.error != null || it.status.contains("실패") }
-                    appendLog("=== 완료: 변경 $okCount개 / 실패 $failCount개 / 전체 ${selected.size}개 ===")
+                    appendLog("=== 완료: 변경 ${okCount}개 / 실패 ${failCount}개 / 전체 ${selected.size}개 ===")
                     currentText.text = "완료"
                 }
             }
@@ -505,7 +505,7 @@ class MainActivity : Activity() {
                 setPadding(0, 12, 0, 0)
             }
             val edit = EditText(this).apply {
-                setText(value)
+                text = value
                 this.inputType = inputType
                 textSize = 13f
             }
@@ -517,7 +517,7 @@ class MainActivity : Activity() {
         val title = TextView(this).apply {
             text = "소스"
             textSize = 14f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            this.typeface = android.graphics.Typeface.DEFAULT_BOLD
         }
         container.addView(title)
 
@@ -531,7 +531,7 @@ class MainActivity : Activity() {
             text = "태그 정책"
             textSize = 14f
             setPadding(0, 16, 0, 0)
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            this.typeface = android.graphics.Typeface.DEFAULT_BOLD
         }
         container.addView(title2)
         addCheck("빈 항목만 채우기 (기존 값 유지)", { prefs.fillMissingOnly }) { prefs.fillMissingOnly = it }
@@ -548,7 +548,7 @@ class MainActivity : Activity() {
             text = "세부 설정"
             textSize = 14f
             setPadding(0, 16, 0, 0)
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            this.typeface = android.graphics.Typeface.DEFAULT_BOLD
         }
         container.addView(title3)
         addNumber("AcoustID API 키", prefs.acoustIdKey, InputType.TYPE_CLASS_TEXT) {

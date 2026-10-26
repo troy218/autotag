@@ -25,6 +25,9 @@ object LrclibSource {
     ): LyricsResult? {
         if (title.isBlank()) return null
 
+        // A plain-only hit is kept around in case no synced version exists anywhere.
+        var plainFallback: LyricsResult? = null
+
         // 1) exact "get" endpoint (artist + title + album + duration signature)
         if (!artist.isNullOrBlank()) {
             val exact = buildString {
@@ -47,7 +50,9 @@ object LrclibSource {
                 val result = json?.let { parse(it, "LRCLIB") }
                 if (result != null && result.isUsable()) {
                     log("  LRCLIB: 정확 일치 ${if (result.synced != null) "(싱크가사)" else "(일반가사)"}")
-                    return preferSynced.let { pick(result, preferSynced) }
+                    if (result.synced != null || !preferSynced) return result
+                    // only plain lyrics here: remember them, but keep looking for a synced version
+                    plainFallback = result
                 }
             }
         }
@@ -95,19 +100,21 @@ object LrclibSource {
             }
             if (candidates.isNotEmpty()) {
                 candidates.sortByDescending { it.first }
-                val (score, result) = candidates.first()
+                // when synced lyrics are preferred, a synced hit beats a better matching plain hit
+                val synced = candidates.filter { it.second.synced != null }
+                val pool = if (preferSynced && synced.isNotEmpty()) synced else candidates
+                val (score, result) = pool.first()
                 if (score < 45.0) continue
                 log("  LRCLIB: 검색 일치 ${if (result.synced != null) "(싱크가사)" else "(일반가사)"} ${score.toInt()}점")
-                return pick(result, preferSynced)
+                return result
             }
+        }
+        plainFallback?.let {
+            log("  LRCLIB: 싱크가사 없음 → 일반가사 사용")
+            return it
         }
         log("  LRCLIB: 가사 없음")
         return null
-    }
-
-    private fun pick(result: LyricsResult, preferSynced: Boolean): LyricsResult {
-        if (!preferSynced) return result
-        return result
     }
 
     private fun parse(json: JSONObject, source: String): LyricsResult? {

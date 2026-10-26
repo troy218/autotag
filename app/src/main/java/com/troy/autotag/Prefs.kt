@@ -129,7 +129,11 @@ class Prefs(context: Context) {
         return try {
             val json = JSONObject(raw)
             val out = mutableMapOf<String, String>()
-            for (k in json.keys()) out[k] = json.getString(k)
+            val keys = json.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                out[k] = json.getString(k)
+            }
             out
         } catch (t: Throwable) {
             mutableMapOf()

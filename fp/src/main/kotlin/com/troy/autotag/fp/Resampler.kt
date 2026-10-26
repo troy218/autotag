@@ -6,7 +6,6 @@ import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.rint
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -147,7 +146,7 @@ internal class Resampler(
                 norm += y
             }
             for (i in 0 until tapCount) {
-                val v = rint(tab[i] * scale / norm)
+                val v = Math.rint(tab[i] * scale / norm)
                 filter[ph * tapCount + i] = when {
                     v > Short.MAX_VALUE.toDouble() -> Short.MAX_VALUE
                     v < Short.MIN_VALUE.toDouble() -> Short.MIN_VALUE

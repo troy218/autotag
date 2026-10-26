@@ -1,12 +1,12 @@
 package com.troy.autotag.fp
 
-import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.floor
-import kotlin.math.log
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -621,7 +621,7 @@ internal class Chroma(
     }
 
     private fun freqToOctave(freq: Double, base: Double = 440.0 / 16.0): Double =
-        log(freq / base) / log(2.0)
+        ln(freq / base) / ln(2.0)
 
     private fun freqToIndex(freq: Double, frameSize: Int, sampleRate: Int): Int =
         (frameSize * freq / sampleRate).roundToInt()
@@ -763,7 +763,7 @@ internal class Filter(
     }
 
     private fun subtractLog(a: Double, b: Double): Double =
-        kotlin.math.log((1.0 + a) / (1.0 + b))
+        ln((1.0 + a) / (1.0 + b))
 }
 
 internal class Quantizer(private val t0: Double, private val t1: Double, private val t2: Double) {
