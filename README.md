@@ -17,15 +17,17 @@
 Android Studio 또는 로컬 Gradle로 직접 빌드합니다 (CI 워크플로는 두지 않았습니다).
 
 ```bash
-# JDK 17 + Gradle 8.7 (또는 Android Studio에서 프로젝트 열고 Run)
-gradle :app:assembleDebug
+# JDK 17 필요. Android Studio에서 열어 Run 해도 됩니다.
+./gradlew :app:assembleDebug
 # 결과: app/build/outputs/apk/debug/app-debug.apk  → 폰에 복사해서 설치
 ```
+
+`.apk`는 `.gitignore`에 있어서 저장소에는 올라가지 않습니다.
 
 테스트 (기기 없이 JVM에서 실행):
 
 ```bash
-gradle :fp:test :app:testDebugUnitTest
+./gradlew :fp:test :app:testDebugUnitTest
 ```
 
 - `:fp:test` — Chromaprint(지문) 포팅을 chromaprint 1.5.1 공식 테스트 데이터와 대조
