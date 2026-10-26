@@ -388,8 +388,10 @@ class MainActivity : Activity() {
             toast("처리할 파일을 선택하세요")
             return
         }
-        if (!hasAllFilesAccess()) {
-            toast("파일 쓰기 권한이 필요합니다")
+        // SAF 로 가져온 파일은 캐시에서 고친 뒤 원본 URI 로 되쓰기 때문에 전체 접근 권한이 없어도 된다.
+        val needsDirectAccess = selected.any { !it.needsCopyBack }
+        if (needsDirectAccess && !hasAllFilesAccess()) {
+            toast("파일 쓰기 권한이 필요합니다 ('권한' 버튼)")
             return
         }
         running = true

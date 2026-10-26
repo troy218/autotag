@@ -72,6 +72,7 @@ object AcoustIdSource {
         for (i in 0 until recordings.length()) {
             val recording = recordings.optJSONObject(i) ?: continue
             val meta = Meta(source = "AcoustID")
+            meta.acoustIdId = result.str("id")
             meta.title = recording.str("title")
             meta.mbTrackId = recording.str("id")
             val artists = recording.arr("artists")
@@ -97,7 +98,6 @@ object AcoustIdSource {
                     meta.album = chosen.str("title")
                     meta.year = TextTools.parseYear(chosen.obj("date")?.str("year"))
                     meta.mbReleaseGroupId = chosen.obj("release-group")?.str("id")
-                    meta.genre = chosen.obj("release-group")?.str("primary-type")
                     val medium = chosen.arr("mediums")?.let {
                         if (it.length() > 0) it.optJSONObject(0) else null
                     }
@@ -119,8 +119,6 @@ object AcoustIdSource {
                             meta.track = medium.int("track-offset")
                         }
                     }
-                    val labelInfo = chosen.str("label")
-                    if (labelInfo != null) meta.label = labelInfo
                 }
             }
             return Triple(meta, releaseId, meta.mbTrackId)

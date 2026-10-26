@@ -14,6 +14,11 @@
 
 ## 빌드 (APK)
 
+**최초 1회 준비 (중요)**: 이 저장소에는 아직 `.github/workflows/build.yml` 이 없습니다.
+`ci/build.yml` 파일 내용을 그대로 `.github/workflows/build.yml` 로 만들어 주세요
+(GitHub 웹: `Add file → Create new file` → 경로 `.github/workflows/build.yml` → `ci/build.yml` 내용 붙여넣기 → Commit).
+한 번만 하면 이후에는 push 할 때마다 APK가 자동으로 만들어집니다.
+
 GitHub Actions에서 자동 빌드됩니다.
 
 - 평소: `Actions → Build APK` 가 push 때마다 실행되고, 결과물은 Artifacts의
