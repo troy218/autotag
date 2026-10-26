@@ -69,9 +69,12 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("embed_artwork", true)
         set(value) = sp.edit().putBoolean("embed_artwork", value).apply()
 
-    /** Keep a copy of the untouched file as "<name>.bak" before writing. */
+    /**
+     * Keep a copy of the untouched file as "<name>.bak" before writing.
+     * On by default: the first batch run should never be able to lose a file.
+     */
     var backupOriginal: Boolean
-        get() = sp.getBoolean("backup", false)
+        get() = sp.getBoolean("backup", true)
         set(value) = sp.edit().putBoolean("backup", value).apply()
 
     /** Write MusicBrainz / AcoustID ids into the tags (harmless, helps players). */
